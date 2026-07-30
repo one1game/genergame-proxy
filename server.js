@@ -224,11 +224,16 @@ async function updateGame(gameId, data) {
 
 // --- Telegram ---
 async function tgSend(chatId, text, extra = {}) {
-  return fetch(`${TG_API}${TG_TOKEN}/sendMessage`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ chat_id: chatId, text, parse_mode: 'HTML', ...extra }),
-  });
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), 5000);
+  try {
+    return await fetch(`${TG_API}${TG_TOKEN}/sendMessage`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ chat_id: chatId, text, parse_mode: 'HTML', ...extra }),
+      signal: ctrl.signal,
+    });
+  } finally { clearTimeout(t); }
 }
 
 // --- Server ---
