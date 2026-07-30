@@ -1,13 +1,11 @@
 // ?????????????????? ?????? ??? ?????? ?????????????? Cloudflare Workers
 import { createServer } from 'node:http';
-import { request as httpsRequest } from 'node:https';
 import { createClient } from '@supabase/supabase-js';
 
 // --- Env ---
 const DS_API_KEY = process.env.DEEPSEEK_API_KEY || '';
 const SB_URL = process.env.SUPABASE_URL || '';
 const SB_KEY = process.env.SUPABASE_SERVICE_KEY || '';
-const TG_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '';
 const PORTAL_URL = process.env.PORTAL_URL || 'https://genergame-bot.igoralx9119.workers.dev';
 const DS_MODEL = process.env.DEEPSEEK_MODEL || 'deepseek-chat';
 
@@ -222,46 +220,15 @@ async function updateGame(gameId, data) {
   if (error) throw new Error(`Supabase: ${error.message}`);
 }
 
-// --- Telegram (native https, not fetch ??? ?????? ???????????????????? UTF-8) ---
-function tgPost(path, body) {
-  return new Promise((resolve, reject) => {
-    const data = Buffer.from(JSON.stringify(body), 'utf-8');
-    const opts = {
-      hostname: 'api.telegram.org',
-      path: `/bot${TG_TOKEN}/${path}`,
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json; charset=utf-8',
-        'Content-Length': data.length,
-      },
-    };
-    const req = httpsRequest(opts, (res) => {
-      let chunks = '';
-      res.on('data', (c) => chunks += c);
-      res.on('end', () => resolve({ ok: res.statusCode === 200, data: chunks, status: res.statusCode }));
-    });
-    req.on('error', reject);
-    req.on('timeout', () => { req.destroy(); reject(new Error('timeout')); });
-    req.setTimeout(15000);
-    req.write(data);
-    req.end();
-  });
-}
-
-async function tgSend(chatId, text, extra = {}) {
-  return tgPost('sendMessage', { chat_id: chatId, text, parse_mode: 'HTML', ...extra });
-}
-
 // --- Server ---
 const server = createServer(async (req, res) => {
-  // CORS
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
 
   if (req.method === 'OPTIONS') { res.writeHead(204); res.end(); return; }
 
-  // Health check ?????? Render
+  // Health check
   if (req.method === 'GET' && req.url === '/health') {
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ ok: true }));
@@ -278,15 +245,11 @@ const server = createServer(async (req, res) => {
   try {
     const job = JSON.parse(body);
 
-    // Validate required fields
     if (!job.gameId || !job.description || !job.chatId) {
       res.writeHead(400, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ error: 'Missing required fields: gameId, description, chatId' }));
       return;
     }
-
-    // Notify: generation started (plain text, ?????? parse_mode)
-    tgPost('sendMessage', { chat_id: job.chatId, text: '???? ???????????????? ?????????????????? ????????... ?????????????? ??????????????.' }).catch(() => {});
 
     // Generate via DeepSeek
     const result = await generate(job.description, job.textures || []);
@@ -301,28 +264,12 @@ const server = createServer(async (req, res) => {
       deploy_url: `${PORTAL_URL}/${job.slug}`,
     });
 
-    // Notify: done
-    const url = `${PORTAL_URL}/${job.slug}`;
-    await tgSend(job.chatId,
-      `??? <b>??${seo.title}?? ????????????!</b> ????\n\n???? <a href="${url}">????????????</a>\n\n???? ???? ?? ??????????????\n???? ???????? ?????????????????????????? ??????????????`
-    );
-    await tgPost('sendMessage', {
-      chat_id: job.chatId,
-      text: '???? ?????????????? ????????:',
-      reply_markup: { inline_keyboard: [[{ text: '???? ????????????', url }]] },
-    });
-
     console.log(`??? ${job.gameId} done in ${Date.now() - startTime}ms`);
 
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ ok: true, seo }));
   } catch (err) {
     console.error(`??? job error: ${err.message}`);
-    let chatId;
-    try { chatId = JSON.parse(body).chatId; } catch {}
-    if (chatId) {
-      tgSend(chatId, `??? ???? ?????????????? ?????????????????????????? ????????. ????????????: ${err.message}`).catch(() => {});
-    }
     res.writeHead(500, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ error: err.message }));
   }
@@ -331,7 +278,7 @@ const server = createServer(async (req, res) => {
 const PORT = parseInt(process.env.PORT || '3000');
 server.listen(PORT, () => console.log(`Genergame proxy on :${PORT}`));
 
-// Global error handlers ??? don't crash on unhandled rejections
+// Global error handlers
 process.on('unhandledRejection', (err) => console.error('Unhandled Rejection:', err?.message));
 process.on('uncaughtException', (err) => console.error('Uncaught Exception:', err?.message));
 
