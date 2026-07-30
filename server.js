@@ -305,3 +305,7 @@ const server = createServer(async (req, res) => {
 const PORT = parseInt(process.env.PORT || '3000');
 server.listen(PORT, () => console.log(`Genergame proxy on :${PORT}`));
 
+// Global error handlers ??? don't crash on unhandled rejections
+process.on('unhandledRejection', (err) => console.error('Unhandled Rejection:', err?.message));
+process.on('uncaughtException', (err) => console.error('Uncaught Exception:', err?.message));
+
