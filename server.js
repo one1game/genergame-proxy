@@ -210,11 +210,15 @@ async function generate(description, textures) {
   return { html, seo: parseSeo(html, description), attempts: MAX_ATTEMPTS, error: lastError };
 }
 
-// --- Supabase ---
-const sb = createClient(SB_URL, SB_KEY);
+// --- Supabase (lazy init) ---
+let _sb = null;
+function getSb() {
+  if (!_sb) _sb = createClient(SB_URL, SB_KEY);
+  return _sb;
+}
 
 async function updateGame(gameId, data) {
-  const { error } = await sb.from('games').update(data).eq('id', gameId);
+  const { error } = await getSb().from('games').update(data).eq('id', gameId);
   if (error) throw new Error(`Supabase: ${error.message}`);
 }
 
