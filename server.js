@@ -225,7 +225,7 @@ async function updateGame(gameId, data) {
 // --- Telegram ---
 async function tgSend(chatId, text, extra = {}) {
   const ctrl = new AbortController();
-  const t = setTimeout(() => ctrl.abort(), 5000);
+  const t = setTimeout(() => ctrl.abort(), 15000);
   try {
     return await fetch(`${TG_API}${TG_TOKEN}/sendMessage`, {
       method: 'POST',
