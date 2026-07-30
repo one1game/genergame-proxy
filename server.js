@@ -1,0 +1,300 @@
+// Генератор игр — без лимитов Cloudflare Workers
+import { createServer } from 'node:http';
+import { createClient } from '@supabase/supabase-js';
+
+// --- Env ---
+const DS_API_KEY = process.env.DEEPSEEK_API_KEY || '';
+const SB_URL = process.env.SUPABASE_URL || '';
+const SB_KEY = process.env.SUPABASE_SERVICE_KEY || '';
+const TG_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '';
+const PORTAL_URL = process.env.PORTAL_URL || 'https://genergame-bot.igoralx9119.workers.dev';
+const DS_MODEL = process.env.DEEPSEEK_MODEL || 'deepseek-chat';
+
+const DS_URL = 'https://api.deepseek.com/v1/chat/completions';
+const TG_API = 'https://api.telegram.org/bot';
+
+const MAX_ATTEMPTS = 2;
+const DS_TIMEOUT = 120_000; // 2 мин
+
+// --- Prompts (копия из CF) ---
+const SYSTEM_PROMPT = `Ты — senior Phaser.js 3.87 разработчик. Верни ОДИН самодостаточный HTML-файл с рабочей игрой БЕЗ багов.
+
+СТРУКТУРА (обязательно):
+<!DOCTYPE html><html><head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
+<title>Название игры — играть онлайн бесплатно</title>
+<meta name="description" content="Кратко опиши игру на русском (1-2 предложения), чтобы заинтересовать">
+<meta name="keywords" content="игра, онлайн, ключевые_слова_через_запятую, phaser, browser">
+<script src="https://cdn.jsdelivr.net/npm/phaser@3.87.0/dist/phaser.min.js"></script>
+<style>*{margin:0;padding:0;touch-action:none}#game{width:100vw;height:100vh}</style>
+</head><body>
+<div id="game"></div>
+<script>
+window.onerror = function(m,s,l,c,e){console.error('GAME ERROR:',m,l,c,e); return true;}
+class MainScene extends Phaser.Scene {
+  constructor(){ super('MainScene'); }
+  preload(){ /* this.load.on('loaderror', ...) обязателен */ }
+  create(){ }
+  update(time, delta){ }
+}
+const config = {
+  type: Phaser.AUTO,
+  parent: 'game',
+  width: 960, height: 540,
+  backgroundColor: '#1a1a2e',
+  scale: { mode: Phaser.Scale.FIT, autoCenter: Phaser.Scale.CENTER_BOTH },
+  physics: { default: 'arcade', arcade: { gravity: {y:0}, debug:false } },
+  scene: [MainScene]
+};
+const game = new Phaser.Game(config);
+<\/script>
+</body></html>
+
+ЖЁСТКИЕ ПРАВИЛА PHASER 3 API (несоблюдение = брак):
+- setTint(color) — НЕ setColor / НЕ setFill
+- setDepth(n) — НЕ setZIndex
+- setOrigin(x,y) — НЕ setAnchor
+- setAlpha(n) — НЕ setOpacity
+- setScale(x,y) — НЕ setSize для масштаба
+- body.setVelocity(x,y) / setVelocityX / setVelocityY
+- this.physics.add.sprite(x,y,key)
+- this.physics.add.overlap(a,b,cb,null,this) / this.physics.add.collider(...)
+- this.add.graphics() — НЕ drawRect/drawCircle
+- this.tweens.add({targets, ...}) — НЕ this.add.tween
+- this.time.addEvent({delay, callback, callbackScope:this, loop:true}) — НЕ setInterval
+- this.add.text(x,y,str,{fontSize,color,fontFamily})
+
+ЗАГРУЗКА ТЕКСТУР:
+this.load.on('loaderror', (file) => { console.warn('Не загрузилась:', file.key); });
+if (!this.textures.exists('player')) {
+  const g = this.make.graphics({x:0,y:0,add:false});
+  g.fillStyle(0xff00ff).fillRect(0,0,32,32);
+  g.generateTexture('player', 32, 32);
+}
+
+ЗВУК: AudioContext/OscillatorNode напрямую (НЕ this.sound.add)
+const actx = new (window.AudioContext || window.webkitAudioContext)();
+
+МОБИЛЬНЫЕ УПРАВЛЕНИЯ: Phaser-объекты (.setInteractive), НЕ HTML-кнопки.
+Кнопки 60x60px с отступом от края.
+
+TELEGRAM WEBAPP:
+if (window.Telegram?.WebApp) { const tg = Telegram.WebApp; tg.ready(); tg.expand(); }
+
+ПРОИЗВОДИТЕЛЬНОСТЬ:
+- Уничтожай объекты за пределами экрана
+- Не создавай this.add.* внутри update() каждый кадр
+
+Верни ТОЛЬКО HTML-код. Без markdown-обёртки, без пояснений.`;
+
+function buildUserPrompt(description, textures, lastError) {
+  let p = `Создай игру: ${description}`;
+  if (textures?.length) {
+    p += `\n\nЗагрузи текстуры в preload():\n${textures.map(t => `- this.load.image('${t.name}', '${t.url}')`).join('\n')}`;
+    p += `\nИспользуй ключ '${textures[0].name}' в create().`;
+  }
+  p += `\n\nТребования: чёткая цель, условие поражения/победы, минимум 1 источник опасности, HUD (счёт/жизни), тактильный отклик. Верни ПОЛНЫЙ HTML-файл.`;
+  if (lastError) p += `\n\nПРЕДЫДУЩАЯ ОШИБКА (исправь именно её):\n${lastError}`;
+  return p;
+}
+
+// --- Валидация HTML ---
+const BANNED = [
+  { re: /setColor\(/i, name: 'setColor() → setTint()' },
+  { re: /setZIndex\(/i, name: 'setZIndex() → setDepth()' },
+  { re: /setAnchor\(/i, name: 'setAnchor() → setOrigin()' },
+  { re: /setOpacity\(/i, name: 'setOpacity() → setAlpha()' },
+  { re: /this\.add\.tween\(/i, name: 'this.add.tween() → this.tweens.add()' },
+  { re: /setInterval\(/i, name: 'setInterval() → this.time.addEvent()' },
+  { re: /this\.sound\.add\(/i, name: 'this.sound.add() — используй Web Audio API' },
+];
+
+function validateHtml(html) {
+  if (!html || html.length < 100) return 'HTML слишком короткий';
+  for (const b of BANNED) {
+    if (b.re.test(html)) return `Запрещён: ${b.name}`;
+  }
+  if (!html.includes('Phaser.Game(')) return 'Нет Phaser.Game()';
+  const required = ['</script>', '</body>', '</html>'];
+  for (const tag of required) {
+    if (!html.includes(tag)) return `Нет ${tag} — HTML обрезан`;
+  }
+  return null;
+}
+
+function cleanHtml(content) {
+  return content
+    .replace(/^```html\n?/i, '').replace(/^```\n?/i, '')
+    .replace(/\n```$/i, '').trim();
+}
+
+function ensureCdn(html) {
+  const hasCDN = /jsdelivr\.net\/npm\/phaser|cdnjs\.cloudflare\.com.*phaser|unpkg\.com\/phaser/i.test(html);
+  if (!hasCDN) {
+    html = html.replace('</head>',
+      '<script src="https://cdn.jsdelivr.net/npm/phaser@3.87.0/dist/phaser.min.js"></script>\n</head>'
+    );
+  }
+  if (!html.includes('Phaser.Game(')) {
+    const fb = '<script>try{new Phaser.Game({type:Phaser.AUTO,width:800,height:600,parent:document.querySelector("#game-container,body>div,body"),scene:{create(){this.add.text(400,300,"Загрузка...",{fontSize:"32px",color:"#fff"}).setOrigin(0.5)}}})}catch(e){document.body.innerHTML="<h2 style=color:white;text-align:center;padding:40px;>Ошибка загрузки</h2>"}<\/script>';
+    if (html.includes('</body>')) html = html.replace('</body>', fb + '\n</body>');
+    else html += '\n' + fb + '\n</body></html>';
+  }
+  return html;
+}
+
+function parseSeo(html, fallbackDesc) {
+  const titleMatch = html.match(/<title>(.*?)<\/title>/i);
+  const descMatch = html.match(/<meta\s+name=["']description["']\s+content=["'](.*?)["']/i);
+  const kwMatch = html.match(/<meta\s+name=["']keywords["']\s+content=["'](.*?)["']/i);
+  return {
+    title: titleMatch ? titleMatch[1].trim().replace(/<[^>]*>/g, '') : 'AI Game',
+    description: descMatch ? descMatch[1].trim() : (fallbackDesc || '').slice(0, 200),
+    keywords: kwMatch ? kwMatch[1].trim() : 'игра, онлайн, ai, phaser',
+  };
+}
+
+// --- DeepSeek ---
+async function callDeepSeek(messages) {
+  const res = await fetch(DS_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${DS_API_KEY}` },
+    body: JSON.stringify({
+      model: DS_MODEL,
+      messages,
+      temperature: 0.8,
+      max_tokens: 8192,
+    }),
+    signal: AbortSignal.timeout(DS_TIMEOUT),
+  });
+  if (!res.ok) {
+    const err = await res.text();
+    throw new Error(`DeepSeek ${res.status}: ${err}`);
+  }
+  const data = await res.json();
+  const content = data.choices?.[0]?.message?.content;
+  if (!content) throw new Error('DeepSeek вернул пустой ответ');
+  return content;
+}
+
+async function generate(description, textures) {
+  let lastError = '';
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    const userPrompt = buildUserPrompt(description, textures, attempt > 1 ? lastError : undefined);
+    const raw = await callDeepSeek([
+      { role: 'system', content: SYSTEM_PROMPT },
+      { role: 'user', content: userPrompt },
+    ]);
+    let html = cleanHtml(raw);
+    const seo = parseSeo(html, description);
+
+    if (html.includes('class ') && html.includes('extends') && !html.includes('</script>')) {
+      lastError = 'Код обрезан: нет </script>';
+      continue;
+    }
+
+    html = ensureCdn(html);
+    const err = validateHtml(html);
+    if (!err) return { html, seo, attempts: attempt };
+    lastError = err;
+  }
+  // Fallback
+  const raw = await callDeepSeek([
+    { role: 'system', content: SYSTEM_PROMPT },
+    { role: 'user', content: buildUserPrompt(description, textures) },
+  ]);
+  const html = ensureCdn(cleanHtml(raw));
+  return { html, seo: parseSeo(html, description), attempts: MAX_ATTEMPTS, error: lastError };
+}
+
+// --- Supabase ---
+const sb = createClient(SB_URL, SB_KEY);
+
+async function updateGame(gameId, data) {
+  const { error } = await sb.from('games').update(data).eq('id', gameId);
+  if (error) throw new Error(`Supabase: ${error.message}`);
+}
+
+// --- Telegram ---
+async function tgSend(chatId, text, extra = {}) {
+  return fetch(`${TG_API}${TG_TOKEN}/sendMessage`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ chat_id: chatId, text, parse_mode: 'HTML', ...extra }),
+  });
+}
+
+// --- Server ---
+const server = createServer(async (req, res) => {
+  // CORS
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+
+  if (req.method === 'OPTIONS') { res.writeHead(204); res.end(); return; }
+  if (req.method !== 'POST') { res.writeHead(405); res.end('POST only'); return; }
+
+  let body = '';
+  for await (const chunk of req) body += chunk;
+
+  const startTime = Date.now();
+
+  try {
+    const job = JSON.parse(body);
+
+    // Validate required fields
+    if (!job.gameId || !job.description || !job.chatId) {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Missing required fields: gameId, description, chatId' }));
+      return;
+    }
+
+    // Notify: generation started
+    tgSend(job.chatId, '🎮 Запустил генерацию игры... Подожди немного.').catch(() => {});
+
+    // Generate via DeepSeek
+    const result = await generate(job.description, job.textures || []);
+
+    // Save to Supabase
+    const seo = result.seo;
+    await updateGame(job.gameId, {
+      status: 'ready',
+      source_code: result.html.slice(0, 100000),
+      title: seo.title,
+      description: seo.description,
+      deploy_url: `${PORTAL_URL}/${job.slug}`,
+    });
+
+    // Notify: done
+    const url = `${PORTAL_URL}/${job.slug}`;
+    await tgSend(job.chatId,
+      `✅ <b>«${seo.title}» готова!</b> 🎮\n\n🔗 <a href="${url}">Играть</a>\n\n📱 ПК и телефон\n🌐 Игра индексируется поиском`
+    );
+    await fetch(`${TG_API}${TG_TOKEN}/sendMessage`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        chat_id: job.chatId,
+        text: '👇 Открыть игру:',
+        reply_markup: { inline_keyboard: [[{ text: '🎮 Играть', url }]] },
+      }),
+    });
+
+    console.log(`✅ ${job.gameId} done in ${Date.now() - startTime}ms`);
+
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ ok: true, seo }));
+  } catch (err) {
+    console.error(`❌ ${JSON.parse(body).gameId || '?'}: ${err.message}`);
+    const chatId = JSON.parse(body).chatId;
+    if (chatId) {
+      tgSend(chatId, `❌ Не удалось сгенерировать игру. Ошибка: ${err.message}`).catch(() => {});
+    }
+    res.writeHead(500, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: err.message }));
+  }
+});
+
+const PORT = parseInt(process.env.PORT || '3000');
+server.listen(PORT, () => console.log(`Genergame proxy on :${PORT}`));
