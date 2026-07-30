@@ -265,12 +265,12 @@ const server = createServer(async (req, res) => {
     });
 
     // Notify CF Worker callback (???? ???????????????? ?????????????????????? ?? Telegram)
-    if (job.slug && job.chatId) {
+    if (job.slug && job.chatId && seo.title) {
       const cbUrl = `${PORTAL_URL}/callback`;
       fetch(cbUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ slug: job.slug, chatId: job.chatId }),
+        body: JSON.stringify({ slug: job.slug, chatId: job.chatId, title: seo.title }),
       }).catch(() => {});
     }
 
