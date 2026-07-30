@@ -244,6 +244,14 @@ const server = createServer(async (req, res) => {
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
 
   if (req.method === 'OPTIONS') { res.writeHead(204); res.end(); return; }
+
+  // Health check ?????? Render
+  if (req.method === 'GET' && req.url === '/health') {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ ok: true }));
+    return;
+  }
+
   if (req.method !== 'POST') { res.writeHead(405); res.end('POST only'); return; }
 
   let body = '';
@@ -297,8 +305,9 @@ const server = createServer(async (req, res) => {
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ ok: true, seo }));
   } catch (err) {
-    console.error(`??? ${JSON.parse(body).gameId || '?'}: ${err.message}`);
-    const chatId = JSON.parse(body).chatId;
+    console.error(`??? job error: ${err.message}`);
+    let chatId;
+    try { chatId = JSON.parse(body).chatId; } catch {}
     if (chatId) {
       tgSend(chatId, `??? ???? ?????????????? ?????????????????????????? ????????. ????????????: ${err.message}`).catch(() => {});
     }
