@@ -264,6 +264,16 @@ const server = createServer(async (req, res) => {
       deploy_url: `${PORTAL_URL}/${job.slug}`,
     });
 
+    // Notify CF Worker callback (???? ???????????????? ?????????????????????? ?? Telegram)
+    if (job.slug && job.chatId) {
+      const cbUrl = `${PORTAL_URL}/callback`;
+      fetch(cbUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ slug: job.slug, chatId: job.chatId }),
+      }).catch(() => {});
+    }
+
     console.log(`??? ${job.gameId} done in ${Date.now() - startTime}ms`);
 
     res.writeHead(200, { 'Content-Type': 'application/json' });
