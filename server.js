@@ -15,86 +15,31 @@ const MAX_ATTEMPTS = 3;
 const DS_TIMEOUT = 120_000; // 2 мин
 
 // --- Prompts (копия из CF) ---
-const SYSTEM_PROMPT = `Ты — senior Phaser.js 3.87 разработчик. Верни ОДИН самодостаточный HTML-файл с рабочей игрой БЕЗ багов.
+const SYSTEM_PROMPT = `Ты — элитный Game Developer на Phaser.js 3.87. Твоя задача — создать визуально безупречную, аддиктивную игру в ОДНОМ HTML-файле.
 
-СТРУКТУРА (обязательно):
-<!DOCTYPE html><html><head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
-<title>Название игры — играть онлайн бесплатно</title>
-<meta name="description" content="Кратко опиши игру на русском (1-2 предложения), чтобы заинтересовать">
-<meta name="keywords" content="игра, онлайн, ключевые_слова_через_запятую, phaser, browser">
-<script src="https://cdn.jsdelivr.net/npm/phaser@3.87.0/dist/phaser.min.js"></script>
-<style>*{margin:0;padding:0;touch-action:none}#game{width:100vw;height:100vh}</style>
-</head><body>
-<div id="game"></div>
-<script>
-window.onerror = function(m,s,l,c,e){console.error('GAME ERROR:',m,l,c,e); return true;}
-class MainScene extends Phaser.Scene {
-  constructor(){ super('MainScene'); }
-  preload(){ /* this.load.on('loaderror', ...) обязателен */ }
-  create(){ }
-  update(time, delta){ }
-}
-const config = {
-  type: Phaser.AUTO,
-  parent: 'game',
-  width: 960, height: 540,
-  backgroundColor: '#1a1a2e',
-  scale: { mode: Phaser.Scale.FIT, autoCenter: Phaser.Scale.CENTER_BOTH },
-  physics: { default: 'arcade', arcade: { gravity: {y:0}, debug:false } },
-  scene: [MainScene]
-};
-const game = new Phaser.Game(config);
-<\/script>
-</body></html>
+ГРАФИКА И АССЕТЫ (КРИТИЧНО):
+1. Если текстуры не предоставлены, ГЕНЕРИРУЙ SVG и конвертируй их в текстуры Phaser.
+   Пример: const svg = '<svg...>...</svg>'; const url = 'data:image/svg+xml;base64,' + btoa(svg); this.load.image('key', url);
+2. Используй современные визуальные эффекты: частицы (this.add.particles), градиенты, свечение (post-processing эффекты если уместно).
+3. UI должен выглядеть профессионально: скруглённые углы, тени, анимации появления.
 
-ЖЁСТКИЕ ПРАВИЛА PHASER 3 API (несоблюдение = брак):
-- setTint(color) — НЕ setColor / НЕ setFill
-- setDepth(n) — НЕ setZIndex
-- setOrigin(x,y) — НЕ setAnchor
-- setAlpha(n) — НЕ setOpacity
-- setScale(x,y) — НЕ setSize для масштаба
-- body.setVelocity(x,y) / setVelocityX / setVelocityY
-- this.physics.add.sprite(x,y,key)
-- this.physics.add.overlap(a,b,cb,null,this) / this.physics.add.collider(...)
-- this.add.graphics() — НЕ drawRect/drawCircle
-- this.tweens.add({targets, ...}) — НЕ this.add.tween
-- this.time.addEvent({delay, callback, callbackScope:this, loop:true}) — НЕ setInterval
-- this.add.text(x,y,str,{fontSize,color,fontFamily})
+ЗВУКОВОЙ ДИЗАЙН:
+1. Используй Web Audio API для генерации звуковых эффектов (синтез).
+   Создай класс SoundEffects с методами: playJump(), playHit(), playWin(), playExplosion().
+   Используй OscillatorNode и GainNode для создания сочных 8-бит или футуристичных звуков.
 
-ЗАГРУЗКА ТЕКСТУР:
-this.load.on('loaderror', (file) => { console.warn('Не загрузилась:', file.key); });
-if (!this.textures.exists('player')) {
-  const g = this.make.graphics({x:0,y:0,add:false});
-  g.fillStyle(0xff00ff).fillRect(0,0,32,32);
-  g.generateTexture('player', 32, 32);
-}
+ГЕЙМДИЗАЙН И ПОЛИШ:
+1. Геймплейный цикл: Заставка → Геймплей → Game Over/Win → Рестарт.
+2. Фидбек (Juice): камера трясётся при ударе, частицы при взрыве, плавные твины для всех UI элементов.
+3. Сложность: реализуй динамическое усложнение (ускорение врагов, увеличение их количества).
+4. Управление: ПК (стрелки/WASD) + Мобильные (виртуальный джойстик или кнопки на экране, реализованные через Phaser .setInteractive()).
 
-ЗВУК: AudioContext/OscillatorNode напрямую (НЕ this.sound.add)
-const actx = new (window.AudioContext || window.webkitAudioContext)();
+ТЕХНИЧЕСКИЙ СТЕК:
+- Phaser 3.87 (CDN)
+- Telegram WebApp SDK (hapticFeedback при столкновениях/кликах)
+- Один HTML файл, всё инлайново.
 
-МОБИЛЬНЫЕ УПРАВЛЕНИЯ: Phaser-объекты (.setInteractive), НЕ HTML-кнопки.
-Кнопки 60x60px с отступом от края.
-
-TELEGRAM WEBAPP:
-if (window.Telegram?.WebApp) { const tg = Telegram.WebApp; tg.ready(); tg.expand(); }
-
-ПРОИЗВОДИТЕЛЬНОСТЬ:
-- Уничтожай объекты за пределами экрана
-- Не создавай this.add.* внутри update() каждый кадр
-
-ГЕЙМДИЗАЙН (несоблюдение = брак):
-- Игра должна быть ПОЛНОЦЕННОЙ: меню/стартовый экран → геймплей → победа/поражение → экран результата с кнопкой «Играть снова» (scene.restart()).
-- Чёткая цель, понятная за 5 секунд. Минимум 1 источник опасности/препятствие.
-- Прогрессия сложности: скорость/волны/уровни растут со временем или со счётом.
-- Сочный фидбек на КАЖДОЕ действие: твины (scale/alpha), частицы, звук через WebAudio, всплывающие числа очков.
-- HUD всегда видим: счёт, жизни/здоровье, таймер (если уместно).
-- Баланс: начало лёгкое, к концу сложнее. Игра должна быть проходимой.
-- Не оставляй «пустых» сцен: если игрок ничего не делает 3 секунды — что-то должно происходить (фоновое движение, подсказка).
-- Визуал: аккуратный UI, контрастные цвета, читаемые шрифты, скруглённые панели, тени.
-
-Верни ТОЛЬКО HTML-код. Без markdown-обёртки, без пояснений.`;
+Верни ТОЛЬКО чистый HTML-код. Никаких пояснений, никаких markdown блоков.`;
 
 // Промпт для авторевью: DeepSeek проверяет сгенерированную игру и чинит баги
 const REVIEW_PROMPT = `Ты — QA-инженер по Phaser.js 3.87. Ниже — HTML-игра, сгенерированная ИИ. Проверь её и исправь ВСЕ баги:
@@ -109,14 +54,21 @@ const REVIEW_PROMPT = `Ты — QA-инженер по Phaser.js 3.87. Ниже 
 Сохрани название, теги <title> и meta description БЕЗ изменений. Не переписывай стиль игры — только чини баги.
 Верни ТОЛЬКО исправленный ПОЛНЫЙ HTML-код (от <!DOCTYPE html> до </html>). Без пояснений, без markdown-обёртки.`;
 
-function buildUserPrompt(description, textures, lastError) {
-  let p = `Создай игру: ${description}`;
-  if (textures?.length) {
-    p += `\n\nЗагрузи текстуры в preload():\n${textures.map(t => `- this.load.image('${t.name}', '${t.url}')`).join('\n')}`;
-    p += `\nИспользуй ключ '${textures[0].name}' в create().`;
+function buildUserPrompt(description, textures, lastError, baseCode) {
+  let p = "";
+  if (baseCode) {
+    p = `Улучши или измени текущую игру на основе этого запроса: "${description}"\n\nТекущий код игры:\n${baseCode}\n\nВнеси изменения, сохранив общую структуру, но реализовав новые пожелания.`;
+  } else {
+    p = `Создай новую игру с нуля по описанию: "${description}"`;
+    if (textures?.length) {
+      p += `\n\nИспользуй эти текстуры в качестве референсов или напрямую:\n${textures.map(t => `- ${t.name}: ${t.url}`).join('\n')}`;
+    }
   }
-  p += `\n\nТребования: чёткая цель, условие поражения/победы, минимум 1 источник опасности, HUD (счёт/жизни), тактильный отклик. Верни ПОЛНЫЙ HTML-файл.`;
-  if (lastError) p += `\n\nПРЕДЫДУЩАЯ ОШИБКА (исправь именно её):\n${lastError}`;
+  
+  p += `\n\nОБЯЗАТЕЛЬНО: Добавь синтезированные звуки через Web Audio API и визуальные эффекты частиц. Игра должна ощущаться "дорого" и качественно.`;
+  
+  if (lastError) p += `\n\nИСПРАВЬ ОШИБКУ из предыдущей попытки:\n${lastError}`;
+  
   return p;
 }
 
@@ -223,10 +175,10 @@ async function reviewAndFix(html, description) {
   }
 }
 
-async function generate(description, textures) {
+async function generate(description, textures, baseCode) {
   let lastError = '';
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
-    const userPrompt = buildUserPrompt(description, textures, attempt > 1 ? lastError : undefined);
+    const userPrompt = buildUserPrompt(description, textures, attempt > 1 ? lastError : undefined, baseCode);
     const raw = await callDeepSeek([
       { role: 'system', content: SYSTEM_PROMPT },
       { role: 'user', content: userPrompt },
@@ -305,7 +257,7 @@ const server = createServer(async (req, res) => {
     }
 
     // Generate via DeepSeek
-    const result = await generate(job.description, job.textures || []);
+    const result = await generate(job.description, job.textures || [], job.baseCode);
 
     // Save to Supabase
     const seo = result.seo;
