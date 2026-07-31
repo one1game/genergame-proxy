@@ -80,7 +80,7 @@ function specBrief(spec, description) {
 const PLAY_SCENE_PROMPT = `Ты — senior Phaser.js 3.87 разработчик. Каркас игры УЖЕ ГОТОВ: BootScene, MenuScene, GameOverScene, класс SFX (Web Audio), рекорд в localStorage, переходы между сценами. Твоя задача — написать ТОЛЬКО геймплейную логику PlayScene.
 
 ДОСТУПНОЕ ОКРУЖЕНИЕ (используй именно так):
-- this.sfx — экземпляр класса SFX, метод: this.sfx.play(freq, dur, type='square', vol=0.15). Вызывай на jump/hit/collect/gameover.
+- this.sfx — экземпляр класса SFX с готовыми эффектами: this.sfx.jump(), this.sfx.dash(), this.sfx.collect(), this.sfx.hit(), this.sfx.win(), this.sfx.over(). Плюс низкоуровневый this.sfx.play(freq, dur, type, vol). Вызывай нужный звук на каждое событие (прыжок/рывок/сбор/урон/победа/поражение).
 - this.registry.set('score', n) / this.registry.get('score') — очки. GameOverScene сама прочитает score и сохранит рекорд.
 - this.scene.start('GameOverScene') — завершение игры (победа/поражение).
 - Текстура из BootScene: 'pixel' (белый квадрат 1x1). Свои текстуры создавай в create(): this.make.graphics()...generateTexture('key', w, h), затем this.add.image(...) с .setTint().
@@ -94,14 +94,19 @@ const PLAY_SCENE_PROMPT = `Ты — senior Phaser.js 3.87 разработчик
 2. Реализуй difficulty_curve буквально (ускорение/рост числа врагов через this.time.addEvent или счётчик).
 3. Реализуй КАЖДЫЙ juice из ТЗ кодом: тряска this.cameras.main.shake(150,0.01), партиклы this.add.particles(...).explode(), score popup (this.add.text + tween на y/alpha).
 4. Вызывай this.sfx.play(...) на КАЖДЫЙ sound_cue из ТЗ.
-5. Мобильное управление — только Phaser-объекты (this.input.keyboard / this.input.on('pointerdown') / виртуальные кнопки .setInteractive()), без HTML-оверлеев.
-6. ПРЕМИУМ-ФИШКИ (делай минимум 3):
+5. Мобильное управление — Phaser-тексты-кнопки (◀ ▶ ▲ DASH) с .setInteractive(), флаги виртуальных клавиш и разбор в update(), без HTML-оверлеев.
+6. ПРЕМИУМ-ФИШКИ (делай минимум 4):
    - стартовый нарратив: короткая текстовая миссия в начале (this.add.text + tween fade), как в киберпанк-играх;
-   - спец-механика с ресурсом: dash/двойной прыжок/щит, тратящие энергию (0-100), с полоской-индикатором и регенерацией;
+   - спец-механика с ресурсом: dash/двойной прыжок/щит, тратящие энергию (0-100), с полоской-индикатором и регенерацией; dash обязательно с тряской камеры (shake) и партиклами;
+   - HUD как в дорогих играх: эмодзи-иконки (💎 ❤️ ⏱ 🏆), рекорд из localStorage показывается в HUD и обновляется на лету, счёт/таймер с подложкой (graphics rect с alpha);
+   - таймер миссии (обратный отсчёт 3:00) и/или условие победы по прогрессу — покажи его в HUD;
    - шлейф частиц за игроком при рывке/движении (this.add.particles(...).start() при рывке, .stop() после);
-   - фоновый декор-слой: частицы окружения (дождь/искры/звёзды) или параллакс-графика;
+   - фоновый декор-слой: частицы окружения (дождь/искры/звёзды) или параллакс-графика в 2 слоя;
    - камера-фоллоу на игрока, если мир шире экрана (this.cameras.main.startFollow(player)) + UI с .setScrollFactor(0);
-   - финальная точка/портал для победы (не только счётчик).
+   - враги с прицеливанием: турели/дроны, стреляющие пулями в сторону игрока (Phaser.Math.Angle.Between);
+   - свечение персонажа: player.postFX.addGlow(0x00ffff, 2, 0, false, 0.1, 10);
+   - финальная точка/портал для победы (не только счётчик);
+   - оверлей результата ВНУТРИ сцены: затемнение (add.rectangle с alpha) + заголовок (победа/поражение) + кнопка «ЗАНОВО» (scene.restart).
 7. ЭСТЕТИКА: единая палитра из ТЗ (art_style.palette), у объектов тени/свечение через setShadow или tint, чистая композиция, ничего не выглядит "голым текстом".
 
 ЧЕК-ЛИСТ ПЕРЕД ОТВЕТОМ: win/lose проверяются? juice реально в коде? звуки вызываются? нет запрещённых методов?
@@ -193,10 +198,17 @@ function buildGameHtml(playSceneBody, spec, description) {
 <title>${safeTitle}</title>
 <meta name="description" content="${desc}">
 <script src="https://cdn.jsdelivr.net/npm/phaser@3.87.0/dist/phaser.min.js"></script>
-<style>*{margin:0;padding:0;touch-action:none;-webkit-user-select:none;user-select:none}#game{width:100vw;height:100vh;background:#0a0a12}.scanlines{position:fixed;top:0;left:0;width:100vw;height:100vh;background:linear-gradient(rgba(18,16,16,0) 50%,rgba(0,0,0,0.25) 50%),linear-gradient(90deg,rgba(255,0,0,0.06),rgba(0,255,0,0.02),rgba(0,0,255,0.06));background-size:100% 4px,6px 100%;pointer-events:none;z-index:9999;opacity:0.55}</style>
-</head><body><div class="scanlines"></div><div id="game"></div><script>
+<style>*{margin:0;padding:0;touch-action:none;-webkit-user-select:none;user-select:none}#game{width:100vw;height:100vh;background:#0a0a12;display:flex;justify-content:center;align-items:center}.scanlines{position:fixed;top:0;left:0;width:100vw;height:100vh;background:linear-gradient(rgba(18,16,16,0) 50%,rgba(0,0,0,0.25) 50%),linear-gradient(90deg,rgba(255,0,0,0.06),rgba(0,255,0,0.02),rgba(0,0,255,0.06));background-size:100% 4px,6px 100%;pointer-events:none;z-index:9999;opacity:0.55}#startScreen{position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(5,5,16,0.96);display:flex;flex-direction:column;justify-content:center;align-items:center;z-index:10000;cursor:pointer}#startScreen h1{color:#00ffff;font-family:monospace;font-size:34px;text-shadow:0 0 18px #00ffff;margin:0 16px 12px;text-align:center}#startScreen p{color:#ff00ff;font-family:monospace;font-size:16px;animation:blink 1.2s infinite}@keyframes blink{50%{opacity:0.3}}</style>
+</head><body><div class="scanlines"></div><div id="startScreen"><h1>${safeTitle}</h1><p>[ НАЖМИ В ЛЮБОМ МЕСТЕ, ЧТОБЫ НАЧАТЬ ]</p></div><div id="game"></div><script>
+let _actx=null;
+function ensureAudio(){
+  if(!_actx){try{_actx=new(window.AudioContext||window.webkitAudioContext)();}catch(e){}}
+  if(_actx&&_actx.state==='suspended')_actx.resume();
+  return _actx;
+}
+document.getElementById('startScreen').addEventListener('pointerdown',function(){ensureAudio();this.style.display='none';});
 class SFX {
-  constructor(){ this.ctx = new (window.AudioContext||window.webkitAudioContext)(); }
+  constructor(){ this.ctx=ensureAudio(); }
   play(freq, dur, type='square', vol=0.15){
     try {
       const o=this.ctx.createOscillator(), g=this.ctx.createGain();
@@ -206,6 +218,22 @@ class SFX {
       o.stop(this.ctx.currentTime+dur);
     } catch(e){}
   }
+  tone(freq, dur, type, vol, slide){
+    if(!this.ctx) return;
+    try {
+      const o=this.ctx.createOscillator(), g=this.ctx.createGain(), t=this.ctx.currentTime;
+      o.type=type; o.frequency.value=freq;
+      if(slide) o.frequency.exponentialRampToValueAtTime(Math.max(30,freq+slide), t+dur);
+      g.gain.value=vol; g.gain.exponentialRampToValueAtTime(0.001, t+dur);
+      o.connect(g); g.connect(this.ctx.destination); o.start(); o.stop(t+dur);
+    } catch(e){}
+  }
+  jump(){ this.tone(200,0.1,'square',0.1,400); }
+  dash(){ this.tone(150,0.15,'sawtooth',0.15,400); }
+  collect(){ this.tone(880,0.08,'sine',0.1,200); setTimeout(()=>this.tone(1320,0.12,'sine',0.1,150),50); }
+  hit(){ this.tone(120,0.3,'sawtooth',0.2,-60); try{if(window.Telegram?.WebApp?.HapticFeedback)window.Telegram.WebApp.HapticFeedback.impactOccurred('heavy');}catch(e){} }
+  win(){ [523,659,783,1046].forEach((f,i)=>setTimeout(()=>this.tone(f,0.3,'square',0.15),i*100)); }
+  over(){ this.tone(400,0.6,'sawtooth',0.4,-360); }
 }
 function makeUiTexture(scene, key, w, h, color){
   const g = scene.make.graphics({x:0,y:0});
