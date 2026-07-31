@@ -43,7 +43,14 @@ async function generateSpec(description) {
     { role: 'system', content: SPEC_SYSTEM_PROMPT },
     { role: 'user', content: description }
   ], { temperature: 0.4, max_tokens: 1000 });
-  const cleaned = raw.replace(/^```json\s*|```$/gi, '').trim();
+  let cleaned = raw.trim();
+  // Снимаем ```json ... ``` блок целиком
+  const fence = cleaned.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  if (fence) cleaned = fence[1].trim();
+  // Вырезаем JSON-объект между первой { и последней }
+  const firstBrace = cleaned.indexOf('{');
+  const lastBrace = cleaned.lastIndexOf('}');
+  if (firstBrace > -1 && lastBrace > firstBrace) cleaned = cleaned.slice(firstBrace, lastBrace + 1);
   const spec = JSON.parse(cleaned);
   if (!spec || !spec.title) throw new Error('SPEC без title');
   return spec;
@@ -614,3 +621,5 @@ server.listen(PORT, () => console.log(`Genergame proxy on :${PORT}`));
 // Global error handlers
 process.on('unhandledRejection', (err) => console.error('Unhandled Rejection:', err?.message));
 process.on('uncaughtException', (err) => console.error('Uncaught Exception:', err?.message));
+
+export { generate, qaHtml, buildGameHtml };
