@@ -7,7 +7,7 @@ const DS_API_KEY = process.env.DEEPSEEK_API_KEY || '';
 const SB_URL = process.env.SUPABASE_URL || '';
 const SB_KEY = process.env.SUPABASE_SERVICE_KEY || '';
 const PORTAL_URL = process.env.PORTAL_URL || 'https://genergame-bot.igoralx9119.workers.dev';
-const DS_MODEL = process.env.DEEPSEEK_MODEL || 'deepseek-chat';
+const DS_MODEL = process.env.DEEPSEEK_MODEL || 'deepseek-v4-flash';
 
 const DS_URL = 'https://api.deepseek.com/v1/chat/completions';
 
