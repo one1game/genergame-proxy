@@ -95,7 +95,14 @@ const PLAY_SCENE_PROMPT = `Ты — senior Phaser.js 3.87 разработчик
 3. Реализуй КАЖДЫЙ juice из ТЗ кодом: тряска this.cameras.main.shake(150,0.01), партиклы this.add.particles(...).explode(), score popup (this.add.text + tween на y/alpha).
 4. Вызывай this.sfx.play(...) на КАЖДЫЙ sound_cue из ТЗ.
 5. Мобильное управление — только Phaser-объекты (this.input.keyboard / this.input.on('pointerdown') / виртуальные кнопки .setInteractive()), без HTML-оверлеев.
-6. Не пиши constructor, не пиши class-обёртку, не пиши полный HTML, не пиши import.
+6. ПРЕМИУМ-ФИШКИ (делай минимум 3):
+   - стартовый нарратив: короткая текстовая миссия в начале (this.add.text + tween fade), как в киберпанк-играх;
+   - спец-механика с ресурсом: dash/двойной прыжок/щит, тратящие энергию (0-100), с полоской-индикатором и регенерацией;
+   - шлейф частиц за игроком при рывке/движении (this.add.particles(...).start() при рывке, .stop() после);
+   - фоновый декор-слой: частицы окружения (дождь/искры/звёзды) или параллакс-графика;
+   - камера-фоллоу на игрока, если мир шире экрана (this.cameras.main.startFollow(player)) + UI с .setScrollFactor(0);
+   - финальная точка/портал для победы (не только счётчик).
+7. ЭСТЕТИКА: единая палитра из ТЗ (art_style.palette), у объектов тени/свечение через setShadow или tint, чистая композиция, ничего не выглядит "голым текстом".
 
 ЧЕК-ЛИСТ ПЕРЕД ОТВЕТОМ: win/lose проверяются? juice реально в коде? звуки вызываются? нет запрещённых методов?
 ГЛАВНОЕ: игрок должен СТОЯТЬ на платформах/земле и МОЧЬ прыгать — не отключай body.checkCollision.down без причины, иначе игра неиграбельна (проваливание + мёртвый прыжок). Все текстуры, используемые в create() и в this.add.particles, должны быть созданы ДО их первого использования (this.make.graphics + generateTexture раньше, чем add.sprite/image/particles).
@@ -186,8 +193,8 @@ function buildGameHtml(playSceneBody, spec, description) {
 <title>${safeTitle}</title>
 <meta name="description" content="${desc}">
 <script src="https://cdn.jsdelivr.net/npm/phaser@3.87.0/dist/phaser.min.js"></script>
-<style>*{margin:0;padding:0;touch-action:none}#game{width:100vw;height:100vh;background:#0a0a12}</style>
-</head><body><div id="game"></div><script>
+<style>*{margin:0;padding:0;touch-action:none;-webkit-user-select:none;user-select:none}#game{width:100vw;height:100vh;background:#0a0a12}.scanlines{position:fixed;top:0;left:0;width:100vw;height:100vh;background:linear-gradient(rgba(18,16,16,0) 50%,rgba(0,0,0,0.25) 50%),linear-gradient(90deg,rgba(255,0,0,0.06),rgba(0,255,0,0.02),rgba(0,0,255,0.06));background-size:100% 4px,6px 100%;pointer-events:none;z-index:9999;opacity:0.55}</style>
+</head><body><div class="scanlines"></div><div id="game"></div><script>
 class SFX {
   constructor(){ this.ctx = new (window.AudioContext||window.webkitAudioContext)(); }
   play(freq, dur, type='square', vol=0.15){
