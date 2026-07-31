@@ -11,7 +11,7 @@ const DS_MODEL = process.env.DEEPSEEK_MODEL || 'deepseek-chat';
 
 const DS_URL = 'https://api.deepseek.com/v1/chat/completions';
 
-const MAX_ATTEMPTS = 2;
+const MAX_ATTEMPTS = 3;
 const DS_TIMEOUT = 120_000; // 2 мин
 
 // --- Prompts (копия из CF) ---
@@ -84,7 +84,30 @@ if (window.Telegram?.WebApp) { const tg = Telegram.WebApp; tg.ready(); tg.expand
 - Уничтожай объекты за пределами экрана
 - Не создавай this.add.* внутри update() каждый кадр
 
+ГЕЙМДИЗАЙН (несоблюдение = брак):
+- Игра должна быть ПОЛНОЦЕННОЙ: меню/стартовый экран → геймплей → победа/поражение → экран результата с кнопкой «Играть снова» (scene.restart()).
+- Чёткая цель, понятная за 5 секунд. Минимум 1 источник опасности/препятствие.
+- Прогрессия сложности: скорость/волны/уровни растут со временем или со счётом.
+- Сочный фидбек на КАЖДОЕ действие: твины (scale/alpha), частицы, звук через WebAudio, всплывающие числа очков.
+- HUD всегда видим: счёт, жизни/здоровье, таймер (если уместно).
+- Баланс: начало лёгкое, к концу сложнее. Игра должна быть проходимой.
+- Не оставляй «пустых» сцен: если игрок ничего не делает 3 секунды — что-то должно происходить (фоновое движение, подсказка).
+- Визуал: аккуратный UI, контрастные цвета, читаемые шрифты, скруглённые панели, тени.
+
 Верни ТОЛЬКО HTML-код. Без markdown-обёртки, без пояснений.`;
+
+// Промпт для авторевью: DeepSeek проверяет сгенерированную игру и чинит баги
+const REVIEW_PROMPT = `Ты — QA-инженер по Phaser.js 3.87. Ниже — HTML-игра, сгенерированная ИИ. Проверь её и исправь ВСЕ баги:
+
+1. JS-ошибки: undefined переменные, null методы, опечатки в API Phaser 3.87.
+2. Физика: спавн объектов, коллизии, объекты за пределами экрана.
+3. Загрузка текстур: если загружается несуществующая текстура — замени на программную генерацию (make.graphics + generateTexture).
+4. Геймплей-цикл: есть ли победа/поражение, рестарт (scene.restart()), не застревает ли игра.
+5. Мобильное управление: работает ли на тач-экране.
+6. Производительность: объекты не плодятся вечно в update().
+
+Сохрани название, теги <title> и meta description БЕЗ изменений. Не переписывай стиль игры — только чини баги.
+Верни ТОЛЬКО исправленный ПОЛНЫЙ HTML-код (от <!DOCTYPE html> до </html>). Без пояснений, без markdown-обёртки.`;
 
 function buildUserPrompt(description, textures, lastError) {
   let p = `Создай игру: ${description}`;
@@ -184,6 +207,22 @@ async function callDeepSeek(messages) {
   return content;
 }
 
+// Авторевью: DeepSeek проверяет и чинит игру. Возвращает null, если ревью не удалось (обрезка/мусор) — берём оригинал.
+async function reviewAndFix(html, description) {
+  try {
+    const raw = await callDeepSeek([
+      { role: 'system', content: REVIEW_PROMPT },
+      { role: 'user', content: `Игра по запросу: ${description}\n\nHTML-код игры:\n${html}` },
+    ]);
+    const fixed = ensureCdn(cleanHtml(raw));
+    const err = validateHtml(fixed);
+    if (err) return null;
+    return fixed;
+  } catch {
+    return null;
+  }
+}
+
 async function generate(description, textures) {
   let lastError = '';
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
@@ -192,7 +231,7 @@ async function generate(description, textures) {
       { role: 'system', content: SYSTEM_PROMPT },
       { role: 'user', content: userPrompt },
     ]);
-    let html = cleanHtml(raw);
+    let html = ensureCdn(cleanHtml(raw));
     const seo = parseSeo(html, description);
 
     if (html.includes('class ') && html.includes('extends') && !html.includes('</script>')) {
@@ -200,10 +239,18 @@ async function generate(description, textures) {
       continue;
     }
 
-    html = ensureCdn(html);
     const err = validateHtml(html);
-    if (!err) return { html, seo, attempts: attempt };
-    lastError = err;
+    if (err) {
+      lastError = err;
+      continue;
+    }
+
+    // Игра валидна — прогоняем через авторевью (бонус, не регресс)
+    const fixed = await reviewAndFix(html, description);
+    if (fixed) {
+      return { html: fixed, seo: parseSeo(fixed, description), attempts: attempt, reviewed: true };
+    }
+    return { html, seo, attempts: attempt };
   }
   // Fallback
   const raw = await callDeepSeek([
