@@ -1,5 +1,7 @@
 // Генератор игр — без лимитов Cloudflare Workers
+// Пайплайн: SPEC → CODEGEN(PlayScene, best-of-2) → skeleton-сборка → QA (syntax+structural) → review → polish
 import { createServer } from 'node:http';
+import vm from 'node:vm';
 import { createClient } from '@supabase/supabase-js';
 
 // --- Env ---
@@ -14,13 +16,115 @@ const DS_URL = 'https://api.deepseek.com/v1/chat/completions';
 const MAX_ATTEMPTS = 3;
 const DS_TIMEOUT = 120_000; // 2 мин
 
-// --- Prompts (копия из CF) ---
-const SYSTEM_PROMPT = `Ты — элитный Game Developer на Phaser.js 3.87. Твоя задача — создать визуально безупречную, аддиктивную игру в ОДНОМ HTML-файле.
+// ============================================================
+// СТАДИЯ A — SPEC (JSON-бриф вместо расплывчатой фразы)
+// ============================================================
+const SPEC_SYSTEM_PROMPT = `Ты — геймдизайнер. По короткому описанию юзера составь ПОЛНОЕ техническое задание для 2D HTML5-игры на Phaser 3.
+Не меняй идею юзера. Если чего-то не хватает (тема визуала, конкретная механика усложнения, звуковой стиль) — придумай в тон его идее, не делай дженерик.
+
+Верни ТОЛЬКО JSON без пояснений, строго такой структуры:
+{
+  "title": "название на русском",
+  "genre": "platformer|shooter|runner|puzzle|arcade|tower_defense|match3",
+  "core_loop": "что игрок делает каждые несколько секунд, 1 фраза",
+  "win_condition": "конкретное измеримое условие победы",
+  "lose_condition": "конкретное измеримое условие поражения",
+  "entities": [{"name":"","role":"player|enemy|hazard|pickup|projectile","behavior":""}],
+  "controls": {"desktop":"","mobile":"tap|joystick|swipe|buttons"},
+  "difficulty_curve": "формула нарастания сложности со временем/очками",
+  "juice": ["screen_shake_on_hit","particle_burst_on_collect","score_popup"],
+  "sound_cues": ["jump","hit","collect","gameover"],
+  "art_style": {"palette":["#hex","#hex","#hex"], "mood":""},
+  "scenes": ["BootScene","MenuScene","PlayScene","GameOverScene"]
+}`;
+
+async function generateSpec(description) {
+  const raw = await callDeepSeek([
+    { role: 'system', content: SPEC_SYSTEM_PROMPT },
+    { role: 'user', content: description }
+  ], { temperature: 0.4, max_tokens: 1000 });
+  const cleaned = raw.replace(/^```json\s*|```$/gi, '').trim();
+  const spec = JSON.parse(cleaned);
+  if (!spec || !spec.title) throw new Error('SPEC без title');
+  return spec;
+}
+
+function specBrief(spec, description) {
+  if (!spec) return description;
+  return [
+    `ТЕХНИЧЕСКОЕ ЗАДАНИЕ (исполняй буквально):`,
+    `- Название: ${spec.title}`,
+    `- Жанр: ${spec.genre}`,
+    `- Core loop: ${spec.core_loop}`,
+    `- Победа: ${spec.win_condition}`,
+    `- Поражение: ${spec.lose_condition}`,
+    `- Сущности: ${(spec.entities || []).map(e => `${e.name} (${e.role}): ${e.behavior}`).join('; ') || '-'}`,
+    `- Управление: ${JSON.stringify(spec.controls || {})}`,
+    `- Сложность: ${spec.difficulty_curve}`,
+    `- Juice (реализуй каждый): ${(spec.juice || []).join(', ')}`,
+    `- Звуки (вызывай this.sfx.play(...) на каждый): ${(spec.sound_cues || []).join(', ')}`,
+    `- Палитра: ${JSON.stringify(spec.art_style?.palette || [])}, настроение: ${spec.art_style?.mood || ''}`,
+  ].join('\n');
+}
+
+// ============================================================
+// СТАДИЯ B — CODEGEN: модель пишет ТОЛЬКО тело PlayScene
+// ============================================================
+const PLAY_SCENE_PROMPT = `Ты — senior Phaser.js 3.87 разработчик. Каркас игры УЖЕ ГОТОВ: BootScene, MenuScene, GameOverScene, класс SFX (Web Audio), рекорд в localStorage, переходы между сценами. Твоя задача — написать ТОЛЬКО геймплейную логику PlayScene.
+
+ДОСТУПНОЕ ОКРУЖЕНИЕ (используй именно так):
+- this.sfx — экземпляр класса SFX, метод: this.sfx.play(freq, dur, type='square', vol=0.15). Вызывай на jump/hit/collect/gameover.
+- this.registry.set('score', n) / this.registry.get('score') — очки. GameOverScene сама прочитает score и сохранит рекорд.
+- this.scene.start('GameOverScene') — завершение игры (победа/поражение).
+- Текстура из BootScene: 'pixel' (белый квадрат 1x1). Свои текстуры создавай в create(): this.make.graphics()...generateTexture('key', w, h), затем this.add.image(...) с .setTint().
+- Время: this.time.addEvent({delay, callback, loop}) — НЕ setInterval.
+- Физика: this.physics.add.* / this.physics.world.enable(...). Коллизии: this.physics.add.overlap/collider.
+
+ЗАПРЕЩЕНО (брак): setColor, setZIndex, setAnchor, setOpacity, this.add.tween, setInterval, this.sound.add. Для скруглений/цвета — make.graphics + setTint. Для анимаций — this.tweens.add. Для звука — this.sfx.play.
+
+ОБЯЗАТЕЛЬНО:
+1. Реализуй win_condition и lose_condition из ТЗ и проверяй их в update()/событиях — иначе юзер застрянет навсегда.
+2. Реализуй difficulty_curve буквально (ускорение/рост числа врагов через this.time.addEvent или счётчик).
+3. Реализуй КАЖДЫЙ juice из ТЗ кодом: тряска this.cameras.main.shake(150,0.01), партиклы this.add.particles(...).explode(), score popup (this.add.text + tween на y/alpha).
+4. Вызывай this.sfx.play(...) на КАЖДЫЙ sound_cue из ТЗ.
+5. Мобильное управление — только Phaser-объекты (this.input.keyboard / this.input.on('pointerdown') / виртуальные кнопки .setInteractive()), без HTML-оверлеев.
+6. Не пиши constructor, не пиши class-обёртку, не пиши полный HTML, не пиши import.
+
+ЧЕК-ЛИСТ ПЕРЕД ОТВЕТОМ: win/lose проверяются? juice реально в коде? звуки вызываются? нет запрещённых методов?
+
+ФОРМАТ ОТВЕТА — ТОЛЬКО методы класса, без пояснений:
+preload(){ ... }
+create(){ ... }
+update(){ ... }`;
+
+// Промпт для авторевью: DeepSeek проверяет сгенерированную игру и чинит баги
+const REVIEW_PROMPT = `Ты — QA-инженер по Phaser.js 3.87. Ниже — HTML-игра, сгенерированная ИИ (каркас: BootScene/MenuScene/PlayScene/GameOverScene). Проверь и исправь ВСЕ баги:
+
+1. JS-ошибки: undefined переменные, null методы, опечатки в API Phaser 3.87.
+2. Физика: спавн объектов, коллизии, объекты за пределами экрана.
+3. Загрузка текстур: если загружается несуществующая текстура — замени на программную генерацию (this.make.graphics() + generateTexture).
+4. Геймплей-цикл: победа/поражение реально достижимы, рестарт работает, игра не застревает.
+5. Мобильное управление: работает на тач-экране.
+6. Производительность: объекты не плодятся вечно в update().
+
+Сохрани название, теги <title>, meta description и СТРУКТУРУ КЛАССОВ (BootScene/MenuScene/PlayScene/GameOverScene + new Phaser.Game config) БЕЗ изменений. Не переписывай стиль игры — только чини баги.
+Верни ТОЛЬКО исправленный ПОЛНЫЙ HTML-код (от <!DOCTYPE html> до </html>). Без пояснений, без markdown-обёртки.`;
+
+// Отдельный проход "game feel" — на уже рабочем коде
+const POLISH_PROMPT = `Игра технически работает. Твоя задача — ТОЛЬКО повысить ощущение "премиальности", не трогая логику победы/поражения и структуру классов (BootScene/MenuScene/PlayScene/GameOverScene + new Phaser.Game config):
+1. Если анимации появления UI дёрганые/резкие — добавь this.tweens.add с ease 'Back.easeOut' или 'Cubic.easeOut'.
+2. Если при попадании/сборе нет тряски камеры или партиклов — добавь.
+3. Если HUD выглядит "голым текстом" — добавь фон-подложку (graphics rect с alpha) под счёт/жизни.
+4. Если между сценами нет fade-перехода — добавь this.cameras.main.fadeIn(300) в create() каждой сцены.
+Не меняй геймплейную логику, win/lose условия, структуру классов. Верни ТОЛЬКО полный HTML от <!DOCTYPE html> до </html>. Без пояснений, без markdown-обёртки.`;
+
+// Legacy-путь: полная генерация HTML (для улучшения существующих игр по baseCode)
+const LEGACY_SYSTEM_PROMPT = `Ты — элитный Game Developer на Phaser.js 3.87. Твоя задача — создать визуально безупречную, аддиктивную игру в ОДНОМ HTML-файле.
 
 ГРАФИКА И АССЕТЫ (КРИТИЧНО):
 1. Если текстуры не предоставлены, ГЕНЕРИРУЙ SVG и конвертируй их в текстуры Phaser.
    Пример: const svg = '<svg...>...</svg>'; const url = 'data:image/svg+xml;base64,' + btoa(svg); this.load.image('key', url);
-2. Используй современные визуальные эффекты: частицы (this.add.particles), градиенты, свечение (post-processing эффекты если уместно).
+2. Используй современные визуальные эффекты: частицы (this.add.particles), градиенты, свечение.
 3. UI должен выглядеть профессионально: скруглённые углы, тени, анимации появления.
 
 ЗВУКОВОЙ ДИЗАЙН:
@@ -41,19 +145,6 @@ const SYSTEM_PROMPT = `Ты — элитный Game Developer на Phaser.js 3.8
 
 Верни ТОЛЬКО чистый HTML-код. Никаких пояснений, никаких markdown блоков.`;
 
-// Промпт для авторевью: DeepSeek проверяет сгенерированную игру и чинит баги
-const REVIEW_PROMPT = `Ты — QA-инженер по Phaser.js 3.87. Ниже — HTML-игра, сгенерированная ИИ. Проверь её и исправь ВСЕ баги:
-
-1. JS-ошибки: undefined переменные, null методы, опечатки в API Phaser 3.87.
-2. Физика: спавн объектов, коллизии, объекты за пределами экрана.
-3. Загрузка текстур: если загружается несуществующая текстура — замени на программную генерацию (make.graphics + generateTexture).
-4. Геймплей-цикл: есть ли победа/поражение, рестарт (scene.restart()), не застревает ли игра.
-5. Мобильное управление: работает ли на тач-экране.
-6. Производительность: объекты не плодятся вечно в update().
-
-Сохрани название, теги <title> и meta description БЕЗ изменений. Не переписывай стиль игры — только чини баги.
-Верни ТОЛЬКО исправленный ПОЛНЫЙ HTML-код (от <!DOCTYPE html> до </html>). Без пояснений, без markdown-обёртки.`;
-
 function buildUserPrompt(description, textures, lastError, baseCode) {
   let p = "";
   if (baseCode) {
@@ -64,15 +155,137 @@ function buildUserPrompt(description, textures, lastError, baseCode) {
       p += `\n\nИспользуй эти текстуры в качестве референсов или напрямую:\n${textures.map(t => `- ${t.name}: ${t.url}`).join('\n')}`;
     }
   }
-  
+
   p += `\n\nОБЯЗАТЕЛЬНО: Добавь синтезированные звуки через Web Audio API и визуальные эффекты частиц. Игра должна ощущаться "дорого" и качественно.`;
-  
+
   if (lastError) p += `\n\nИСПРАВЬ ОШИБКУ из предыдущей попытки:\n${lastError}`;
-  
+
   return p;
 }
 
-// --- Валидация HTML ---
+// ============================================================
+// SKELETON — фиксированный, руками протестированный каркас.
+// Модель вставляет сюда только тело PlayScene.
+// ============================================================
+function buildGameHtml(playSceneBody, spec, description) {
+  const rawTitle = (spec?.title || description.slice(0, 60)).trim();
+  const safeTitle = rawTitle.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/'/g, "\\'").replace(/"/g, '&quot;');
+  const title = rawTitle;
+  const desc = spec?.core_loop || description.slice(0, 200);
+  return `<!DOCTYPE html>
+<html lang="ru"><head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>${safeTitle}</title>
+<meta name="description" content="${desc}">
+<script src="https://cdn.jsdelivr.net/npm/phaser@3.87.0/dist/phaser.min.js"></script>
+<style>*{margin:0;padding:0;touch-action:none}#game{width:100vw;height:100vh;background:#0a0a12}</style>
+</head><body><div id="game"></div><script>
+class SFX {
+  constructor(){ this.ctx = new (window.AudioContext||window.webkitAudioContext)(); }
+  play(freq, dur, type='square', vol=0.15){
+    try {
+      const o=this.ctx.createOscillator(), g=this.ctx.createGain();
+      o.type=type; o.frequency.value=freq; g.gain.value=vol;
+      o.connect(g); g.connect(this.ctx.destination);
+      o.start(); g.gain.exponentialRampToValueAtTime(0.001, this.ctx.currentTime+dur);
+      o.stop(this.ctx.currentTime+dur);
+    } catch(e){}
+  }
+}
+function makeUiTexture(scene, key, w, h, color){
+  const g = scene.make.graphics({x:0,y:0});
+  g.fillStyle(color,1); g.fillRoundedRect(0,0,w,h,{tl:8,tr:8,bl:8,br:8});
+  g.generateTexture(key,w,h); g.destroy();
+}
+class BootScene extends Phaser.Scene {
+  constructor(){ super('BootScene'); }
+  create(){
+    const g = this.make.graphics({x:0,y:0});
+    g.fillStyle(0xffffff,1); g.fillRect(0,0,1,1); g.generateTexture('pixel',1,1); g.destroy();
+    makeUiTexture(this, 'btn', 220, 64, 0x6366f1);
+    makeUiTexture(this, 'btnHover', 220, 64, 0x818cf8);
+    this.cameras.main.fadeIn(300);
+    this.scene.start('MenuScene');
+  }
+}
+class MenuScene extends Phaser.Scene {
+  constructor(){ super('MenuScene'); }
+  create(){
+    this.cameras.main.fadeIn(300);
+    const cx = this.cameras.main.centerX, cy = this.cameras.main.centerY;
+    this.add.text(cx, cy-160, '${safeTitle}', {fontFamily:'Arial', fontSize:'48px', color:'#ffffff', fontStyle:'bold'}).setOrigin(0.5);
+    const hs = parseInt(localStorage.getItem('game_highscore')||'0', 10);
+    if (hs > 0) this.add.text(cx, cy-100, 'Лучший результат: ' + hs, {fontFamily:'Arial', fontSize:'22px', color:'#94a3b8'}).setOrigin(0.5);
+    const btn = this.add.image(cx, cy, 'btn').setInteractive({useHandCursor:true});
+    this.add.text(cx, cy, 'ИГРАТЬ', {fontFamily:'Arial', fontSize:'26px', color:'#ffffff', fontStyle:'bold'}).setOrigin(0.5);
+    btn.on('pointerover', () => btn.setTexture('btnHover'));
+    btn.on('pointerout', () => btn.setTexture('btn'));
+    btn.on('pointerdown', () => {
+      if (this.sfx && this.sfx.ctx.state === 'suspended') this.sfx.ctx.resume();
+      this.scene.start('PlayScene');
+    });
+  }
+}
+class GameOverScene extends Phaser.Scene {
+  constructor(){ super('GameOverScene'); }
+  create(data){
+    this.cameras.main.fadeIn(300);
+    const score = this.registry.get('score') || 0;
+    const prev = parseInt(localStorage.getItem('game_highscore')||'0', 10);
+    if (score > prev) localStorage.setItem('game_highscore', String(score));
+    const hs = Math.max(score, prev);
+    const cx = this.cameras.main.centerX, cy = this.cameras.main.centerY;
+    this.add.text(cx, cy-140, 'ИГРА ОКОНЧЕНА', {fontFamily:'Arial', fontSize:'40px', color:'#f43f5e', fontStyle:'bold'}).setOrigin(0.5);
+    this.add.text(cx, cy-70, 'Счёт: ' + score, {fontFamily:'Arial', fontSize:'30px', color:'#ffffff'}).setOrigin(0.5);
+    this.add.text(cx, cy-25, 'Рекорд: ' + hs, {fontFamily:'Arial', fontSize:'20px', color:'#94a3b8'}).setOrigin(0.5);
+    const btn1 = this.add.image(cx-60, cy+70, 'btn').setInteractive({useHandCursor:true});
+    this.add.text(cx-60, cy+70, 'ЗАНОВО', {fontFamily:'Arial', fontSize:'22px', color:'#ffffff', fontStyle:'bold'}).setOrigin(0.5);
+    btn1.on('pointerdown', () => this.scene.start('PlayScene'));
+    const btn2 = this.add.image(cx+60, cy+70, 'btn').setInteractive({useHandCursor:true});
+    this.add.text(cx+60, cy+70, 'МЕНЮ', {fontFamily:'Arial', fontSize:'22px', color:'#ffffff', fontStyle:'bold'}).setOrigin(0.5);
+    btn2.on('pointerdown', () => this.scene.start('MenuScene'));
+  }
+}
+class PlayScene extends Phaser.Scene {
+  constructor(){ super('PlayScene'); this.sfx = new SFX(); }
+${playSceneBody}
+}
+new Phaser.Game({
+  type: Phaser.AUTO, parent: 'game', width: 960, height: 540,
+  scale: { mode: Phaser.Scale.FIT, autoCenter: Phaser.Scale.CENTER_BOTH },
+  physics: { default: 'arcade', arcade: { debug: false } },
+  scene: [BootScene, MenuScene, PlayScene, GameOverScene]
+});
+<\/script></body></html>`;
+}
+
+function cleanPlaySceneBody(raw) {
+  let body = raw || '';
+  body = body.replace(/^```(?:js|javascript)?\s*/i, '').replace(/\s*```$/i, '').trim();
+  if (/<!doctype|<html[^>]*>/i.test(body)) return null; // модель вернула полный HTML — брак
+  const re = /preload\s*\(|create\s*\(/;
+  const m = body.match(re);
+  if (!m) return null; // нет preload/create
+  const startIdx = body.indexOf(m[0]);
+  body = body.slice(startIdx);
+  const lastBrace = body.lastIndexOf('}');
+  if (lastBrace === -1) return null;
+  return body.slice(0, lastBrace + 1).trim();
+}
+
+// ============================================================
+// СТАДИЯ C — QA без браузера: syntax-check + structural
+// ============================================================
+function checkSyntax(html) {
+  const scripts = [...html.matchAll(/<script(?![^>]*\bsrc=)[^>]*>([\s\S]*?)<\/script>/gi)]
+    .map(m => m[1]);
+  for (const code of scripts) {
+    try { new vm.Script(code); }
+    catch (e) { return `SyntaxError: ${e.message}`; }
+  }
+  return null;
+}
+
 const BANNED = [
   { re: /setColor\(/i, name: 'setColor() → setTint()' },
   { re: /setZIndex\(/i, name: 'setZIndex() → setDepth()' },
@@ -83,27 +296,45 @@ const BANNED = [
   { re: /this\.sound\.add\(/i, name: 'this.sound.add() — используй Web Audio API' },
 ];
 
+function validateStructure(html) {
+  const errors = [];
+  const scenes = html.match(/class\s+\w+Scene\s+extends\s+Phaser\.Scene/gi) || [];
+  if (scenes.length < 3) errors.push(`Найдено только ${scenes.length} сцен(ы), нужно минимум 3 (Menu/Play/GameOver)`);
+  if (!/scene\.(start|restart)\s*\(/i.test(html)) errors.push('Нет переходов между сценами — юзер не сможет начать/перезапустить игру');
+  if (!/localStorage\.(get|set)Item/i.test(html)) errors.push('Нет сохранения рекорда через localStorage');
+  return errors;
+}
+
 function validateHtml(html) {
-  if (!html || html.length < 100) return 'HTML слишком короткий';
+  if (!html || html.length < 100) return ['HTML слишком короткий'];
+  const errs = [];
   for (const b of BANNED) {
-    if (b.re.test(html)) return `Запрещён: ${b.name}`;
+    if (b.re.test(html)) errs.push(`Запрещён: ${b.name}`);
   }
-  if (!html.includes('Phaser.Game(')) return 'Нет Phaser.Game()';
+  if (!html.includes('Phaser.Game(')) errs.push('Нет Phaser.Game()');
   const required = ['</script>', '</body>', '</html>'];
   for (const tag of required) {
-    if (!html.includes(tag)) return `Нет ${tag} — HTML обрезан`;
+    if (!html.includes(tag)) errs.push(`Нет ${tag} — HTML обрезан`);
   }
-  return null;
+  return errs;
+}
+
+/** Все статические проверки: syntax + banned + closing + structural. Возвращает массив ошибок. */
+function qaHtml(html) {
+  const errs = [];
+  const sx = checkSyntax(html);
+  if (sx) errs.push(sx);
+  errs.push(...validateHtml(html));
+  errs.push(...validateStructure(html));
+  return errs;
 }
 
 function cleanHtml(content) {
   let html = content || '';
-  // Оставляем только с первого <!DOCTYPE html> или <html> до последнего </html>
   const start = html.search(/<!\s*doctype\s+html|<html[^>]*>/i);
   if (start > -1) html = html.slice(start);
   const end = html.lastIndexOf('</html>');
   if (end > -1) html = html.slice(0, end + '</html>'.length);
-  // Снимаем markdown-обёртку если она осталась внутри
   html = html.replace(/^```html\s*/i, '').replace(/^```\s*/i, '').replace(/\s*```$/i, '');
   return html.trim();
 }
@@ -114,11 +345,6 @@ function ensureCdn(html) {
     html = html.replace('</head>',
       '<script src="https://cdn.jsdelivr.net/npm/phaser@3.87.0/dist/phaser.min.js"></script>\n</head>'
     );
-  }
-  if (!html.includes('Phaser.Game(')) {
-    const fb = '<script>try{new Phaser.Game({type:Phaser.AUTO,width:800,height:600,parent:document.querySelector("#game-container,body>div,body"),scene:{create(){this.add.text(400,300,"Загрузка...",{fontSize:"32px",color:"#fff"}).setOrigin(0.5)}}})}catch(e){document.body.innerHTML="<h2 style=color:white;text-align:center;padding:40px;>Ошибка загрузки</h2>"}<\/script>';
-    if (html.includes('</body>')) html = html.replace('</body>', fb + '\n</body>');
-    else html += '\n' + fb + '\n</body></html>';
   }
   return html;
 }
@@ -134,8 +360,10 @@ function parseSeo(html, fallbackDesc) {
   };
 }
 
-// --- DeepSeek ---
-async function callDeepSeek(messages) {
+// ============================================================
+// DeepSeek
+// ============================================================
+async function callDeepSeek(messages, opts = {}) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), DS_TIMEOUT);
   const res = await fetch(DS_URL, {
@@ -144,8 +372,8 @@ async function callDeepSeek(messages) {
     body: JSON.stringify({
       model: DS_MODEL,
       messages,
-      temperature: 0.8,
-      max_tokens: 8192,
+      temperature: opts.temperature ?? 0.8,
+      max_tokens: opts.max_tokens ?? 8192,
     }),
     signal: controller.signal,
   }).finally(() => clearTimeout(timeout));
@@ -159,58 +387,142 @@ async function callDeepSeek(messages) {
   return content;
 }
 
-// Авторевью: DeepSeek проверяет и чинит игру. Возвращает null, если ревью не удалось (обрезка/мусор) — берём оригинал.
+async function generatePlayScene(description, spec, textures, lastError) {
+  let user = specBrief(spec, description);
+  if (textures?.length) {
+    user += `\n\nРеференсные текстуры (можешь использовать как идеи для палитры):\n${textures.map(t => `- ${t.name}: ${t.url}`).join('\n')}`;
+  }
+  if (lastError) user += `\n\nПРЕДЫДУЩАЯ ПОПЫТКА НЕ ПРОШЛА QA. ИСПРАВЬ:\n${lastError}`;
+  return callDeepSeek([
+    { role: 'system', content: PLAY_SCENE_PROMPT },
+    { role: 'user', content: user },
+  ]);
+}
+
+// Ревью: обязательный проход. Если ревьюер вернул мусор — берём оригинал.
 async function reviewAndFix(html, description) {
   try {
     const raw = await callDeepSeek([
       { role: 'system', content: REVIEW_PROMPT },
       { role: 'user', content: `Игра по запросу: ${description}\n\nHTML-код игры:\n${html}` },
-    ]);
+    ], { temperature: 0.3, max_tokens: 8192 });
     const fixed = ensureCdn(cleanHtml(raw));
-    const err = validateHtml(fixed);
-    if (err) return null;
+    const errs = qaHtml(fixed);
+    if (errs.length) return null;
     return fixed;
   } catch {
     return null;
   }
 }
 
-async function generate(description, textures, baseCode) {
+// POLISH: только game-feel, строго после review, с повторным QA.
+async function polishPass(html, description) {
+  try {
+    const raw = await callDeepSeek([
+      { role: 'system', content: POLISH_PROMPT },
+      { role: 'user', content: `Игра по запросу: ${description}\n\nHTML-код игры:\n${html}` },
+    ], { temperature: 0.3, max_tokens: 8192 });
+    const polished = ensureCdn(cleanHtml(raw));
+    const errs = qaHtml(polished);
+    if (errs.length) return null; // полировка что-то сломала — откатываем
+    return polished;
+  } catch {
+    return null;
+  }
+}
+
+// ============================================================
+// Конвейер генерации
+// ============================================================
+async function generateNew(description, textures) {
+  let spec = null;
+  try { spec = await generateSpec(description); }
+  catch { spec = null; } // SPEC не удался — генерим по сырому описанию
+
+  let lastError = '';
+  let best = null;
+
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    // Best-of-2: два параллельных тела PlayScene, берём то, что прошло больше проверок
+    const [bodyA, bodyB] = await Promise.all([
+      generatePlayScene(description, spec, textures, lastError).catch(() => null),
+      generatePlayScene(description, spec, textures, lastError).catch(() => null),
+    ]);
+
+    const candidates = [bodyA, bodyB].map((rawBody) => {
+      if (!rawBody) return null;
+      const body = cleanPlaySceneBody(rawBody);
+      if (!body) return null;
+      const html = buildGameHtml(body, spec, description);
+      const errs = qaHtml(html);
+      return { html, errs };
+    }).filter(Boolean);
+
+    if (!candidates.length) {
+      lastError = 'Модель вернула не тело PlayScene (полный HTML/мусор). Верни ТОЛЬКО методы preload/create/update.';
+      continue;
+    }
+
+    candidates.sort((a, b) => a.errs.length - b.errs.length);
+    const top = candidates[0];
+    if (top.errs.length === 0) { best = top.html; break; }
+    best = top.html;
+    lastError = `Ошибки QA (${top.errs.length}):\n- ` + top.errs.join('\n- ');
+  }
+
+  if (!best) {
+    // Полный провал — отдаём последний сырой результат с пометкой
+    const rawBody = await generatePlayScene(description, spec, textures, '').catch(() => null);
+    const body = rawBody ? cleanPlaySceneBody(rawBody) : null;
+    const html = body ? buildGameHtml(body, spec, description) : null;
+    return {
+      html: html || null,
+      seo: html ? parseSeo(html, description) : null,
+      attempts: MAX_ATTEMPTS,
+      error: lastError || 'Генерация не удалась',
+    };
+  }
+
+  // Обязательный review (не бонус)
+  const reviewed = await reviewAndFix(best, description);
+  const base = reviewed || best;
+
+  // POLISH-проход на рабочем коде + повторный QA внутри polishPass
+  const polished = await polishPass(base, description);
+  const final = polished || base;
+
+  return { html: final, seo: parseSeo(final, description), attempts: MAX_ATTEMPTS, reviewed: !!reviewed };
+}
+
+// Legacy-путь: полный HTML (улучшение существующей игры по baseCode)
+async function generateLegacy(description, textures, baseCode) {
   let lastError = '';
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
     const userPrompt = buildUserPrompt(description, textures, attempt > 1 ? lastError : undefined, baseCode);
     const raw = await callDeepSeek([
-      { role: 'system', content: SYSTEM_PROMPT },
+      { role: 'system', content: LEGACY_SYSTEM_PROMPT },
       { role: 'user', content: userPrompt },
     ]);
     let html = ensureCdn(cleanHtml(raw));
-    const seo = parseSeo(html, description);
-
-    if (html.includes('class ') && html.includes('extends') && !html.includes('</script>')) {
-      lastError = 'Код обрезан: нет </script>';
-      continue;
+    const errs = qaHtml(html);
+    if (!errs.length) {
+      const fixed = (await reviewAndFix(html, description)) || html;
+      const polished = (await polishPass(fixed, description)) || fixed;
+      return { html: polished, seo: parseSeo(polished, description), attempts: attempt, reviewed: true };
     }
-
-    const err = validateHtml(html);
-    if (err) {
-      lastError = err;
-      continue;
-    }
-
-    // Игра валидна — прогоняем через авторевью (бонус, не регресс)
-    const fixed = await reviewAndFix(html, description);
-    if (fixed) {
-      return { html: fixed, seo: parseSeo(fixed, description), attempts: attempt, reviewed: true };
-    }
-    return { html, seo, attempts: attempt };
+    lastError = errs.join('; ');
   }
-  // Fallback
   const raw = await callDeepSeek([
-    { role: 'system', content: SYSTEM_PROMPT },
+    { role: 'system', content: LEGACY_SYSTEM_PROMPT },
     { role: 'user', content: buildUserPrompt(description, textures) },
   ]);
   const html = ensureCdn(cleanHtml(raw));
   return { html, seo: parseSeo(html, description), attempts: MAX_ATTEMPTS, error: lastError };
+}
+
+async function generate(description, textures, baseCode) {
+  if (baseCode) return generateLegacy(description, textures, baseCode);
+  return generateNew(description, textures);
 }
 
 // --- Supabase (lazy init) ---
@@ -259,11 +571,17 @@ const server = createServer(async (req, res) => {
     // Generate via DeepSeek
     const result = await generate(job.description, job.textures || [], job.baseCode);
 
-    // Save to Supabase
+    if (!result.html) {
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: result.error || 'Generation failed' }));
+      return;
+    }
+
+    // Save to Supabase (без искусственного обрезания source_code)
     const seo = result.seo;
     await updateGame(job.gameId, {
       status: 'ready',
-      source_code: result.html.slice(0, 100000),
+      source_code: result.html,
       title: seo.title,
       description: seo.description,
       deploy_url: `${PORTAL_URL}/${job.slug}`,
