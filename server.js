@@ -242,7 +242,7 @@ function buildUserPrompt(description, textures, lastError, baseCode) {
 // SKELETON — фиксированный, руками протестированный каркас.
 // Модель вставляет сюда только тело PlayScene.
 // ============================================================
-function buildGameHtml(playSceneBody, spec, description) {
+function buildGameHtml(playSceneBody, spec, description, meta) {
   const rawTitle = (spec?.title || description.slice(0, 60)).trim();
   const safeTitle = rawTitle.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/'/g, "\\'").replace(/"/g, '&quot;');
   const title = rawTitle;
@@ -266,6 +266,9 @@ function loadHS(){try{return parseInt(localStorage.getItem('game_highscore')||'0
 function saveHS(v){try{localStorage.setItem('game_highscore',String(v));}catch(e){}}
 function loadProgress(){try{return JSON.parse(localStorage.getItem('game_progress')||'{}')||{};}catch(e){return {};}}
 function saveProgress(p){try{localStorage.setItem('game_progress',JSON.stringify(p||{}));}catch(e){}}
+// ======= Идентификация игры для лидерборда =======
+const GAME_ID = ${JSON.stringify((meta && meta.gameId) || '')};
+const GAME_SLUG = ${JSON.stringify((meta && meta.slug) || '')};
 // ======= Генеративная музыка: арпеджио-луп, темп растёт со сложностью =======
 class Music {
   constructor(){ this.ctx=ensureAudio(); this.tempo=96; this.step=0; this.playing=false; this.timer=null; }
@@ -419,6 +422,17 @@ class GameOverScene extends Phaser.Scene {
     const btn2 = this.add.image(cx+60, cy+70, 'btn').setInteractive({useHandCursor:true});
     this.add.text(cx+60, cy+70, 'МЕНЮ', {fontFamily:'Arial', fontSize:'22px', color:'#ffffff', fontStyle:'bold'}).setOrigin(0.5);
     btn2.on('pointerdown', () => this.scene.start('MenuScene'));
+    // Лидерборд: шлём результат, показываем место среди игроков с тем же seed
+    try {
+      const seed = (loadProgress() && loadProgress().seed) || 0;
+      fetch(location.origin + '/api/score', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ gameId: window.GAME_ID || '', seed, score })
+      }).then(r => r.json()).then(j => {
+        if (j && j.rank && this.scene.isActive())
+          this.add.text(cx, cy+130, '🏆 Рейтинг: #' + j.rank + ' из ' + j.total + ' · уровень #' + seed, {fontFamily:'Arial', fontSize:'18px', color:'#fbbf24'}).setOrigin(0.5);
+      }).catch(() => {});
+    } catch(e){}
   }
 }
 class PlayScene extends Phaser.Scene {
@@ -755,7 +769,7 @@ async function polishPass(html, description) {
 // ============================================================
 // Конвейер генерации
 // ============================================================
-async function generateNew(description, textures, baseCode) {
+async function generateNew(description, textures, baseCode, meta) {
   let spec = null;
   try {
     spec = await generateSpec(description + (baseCode
@@ -778,7 +792,7 @@ async function generateNew(description, textures, baseCode) {
       if (!rawBody) return null;
       const body = cleanPlaySceneBody(rawBody);
       if (!body) return null;
-      const html = buildGameHtml(body, spec, description);
+      const html = buildGameHtml(body, spec, description, meta);
       const errs = qaHtml(html);
       const specMisses = checkSpecCoverage(html, spec);
       return { html, body, errs, specMisses, score: candidateScore({ html, errs, specMisses }) };
@@ -797,7 +811,7 @@ async function generateNew(description, textures, baseCode) {
       // Мультипасс: самокритика точечно чинит слабые места вместо полной регенерации
       const critiqued = await selfCritique(top.body, spec, description);
       if (critiqued !== top.body) {
-        const html2 = buildGameHtml(critiqued, spec, description);
+        const html2 = buildGameHtml(critiqued, spec, description, meta);
         const errs2 = qaHtml(html2);
         const specMisses2 = checkSpecCoverage(html2, spec);
         const c2 = { html: html2, body: critiqued, errs: errs2, specMisses: specMisses2, score: candidateScore({ html: html2, errs: errs2, specMisses: specMisses2 }) };
@@ -874,9 +888,9 @@ async function generateLegacy(description, textures, baseCode) {
   return { html, seo: parseSeo(html, description), attempts: MAX_ATTEMPTS, error: lastError };
 }
 
-async function generate(description, textures, baseCode) {
+async function generate(description, textures, baseCode, meta) {
   // Улучшения существующих игр тоже идём через скелетон: baseCode — только референс стиля/фишек
-  return generateNew(description, textures, baseCode);
+  return generateNew(description, textures, baseCode, meta);
 }
 
 // --- Supabase (lazy init) ---
@@ -922,8 +936,42 @@ const server = createServer(async (req, res) => {
       return;
     }
 
+    // Итеративное сотворчество: точечное улучшение по кнопке (патч-промпт поверх baseCode)
+    if (job.action) {
+      const ACTIONS = {
+        graphics: '🎨 Сделай графику заметно красивее и премиальнее: выразительные существа через makeCreature (мягкие блобы, не квадраты), больше Juice-эффектов (Juice.shake/Juice.burst/Juice.popText/Juice.comboFlash), фоновый декор/параллакс, свечение (postFX.addGlow), тщательнее палитра и композиция.',
+        difficulty: '⚔️ Сделай игру СЛОЖНЕЕ: более крутая difficulty_curve, больше врагов/препятствий, выше требования к победе, меньше таймера. Сохрани честный баланс — не делай невыполнимой.',
+        levels: '🗺️ Добавь минимум 5 уровней с прогрессией: перестройка уровня на каждом, прогресс-бар, надпись «УРОВЕНЬ N», рост сложности и новые вызовы между уровнями.',
+      };
+      const actionText = ACTIONS[job.action];
+      if (actionText) {
+        const result = await generate(`${actionText}\n(Игра: ${job.description})`, [], job.baseCode, { gameId: job.gameId, slug: job.slug });
+        if (result.html) {
+          const seo = result.seo;
+          await updateGame(job.gameId, {
+            status: 'ready',
+            source_code: result.html,
+            title: seo.title,
+            description: seo.description,
+            deploy_url: `${PORTAL_URL}/${job.slug}`,
+          });
+          if (job.slug && job.chatId && seo.title) {
+            fetch(`${PORTAL_URL}/callback`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ slug: job.slug, chatId: job.chatId, title: seo.title, gameId: job.gameId }),
+            }).catch(() => {});
+          }
+          console.log(`✅ ${job.gameId} improved (${job.action}) in ${Date.now() - startTime}ms`);
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ ok: true, seo }));
+          return;
+        }
+      }
+    }
+
     // Generate via DeepSeek
-    const result = await generate(job.description, job.textures || [], job.baseCode);
+    const result = await generate(job.description, job.textures || [], job.baseCode, { gameId: job.gameId, slug: job.slug });
 
     if (!result.html) {
       res.writeHead(500, { 'Content-Type': 'application/json' });
@@ -947,7 +995,7 @@ const server = createServer(async (req, res) => {
       fetch(cbUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ slug: job.slug, chatId: job.chatId, title: seo.title }),
+        body: JSON.stringify({ slug: job.slug, chatId: job.chatId, title: seo.title, gameId: job.gameId }),
       }).catch(() => {});
     }
 
