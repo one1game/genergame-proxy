@@ -506,6 +506,14 @@ function validateStructure(html) {
   if (scenes.length < 3) errors.push(`Найдено только ${scenes.length} сцен(ы), нужно минимум 3 (Menu/Play/GameOver)`);
   if (!/scene\.(start|restart)\s*\(/i.test(html)) errors.push('Нет переходов между сценами — юзер не сможет начать/перезапустить игру');
   if (!/localStorage\.(get|set)Item/i.test(html)) errors.push('Нет сохранения рекорда через localStorage');
+  // this.events/this.input/this.cameras появляются ТОЛЬКО после создания сцены Phaser'ом,
+  // а не в её constructor(). this.events.on(...) в конструкторе = crash "undefined.on" при старте.
+  for (const m of html.matchAll(/constructor\s*\(\s*\)\s*\{[^}]*\}/g)) {
+    if (/\.(on|emit|setTexture)\s*\(/.test(m[0])) {
+      errors.push('this.events/this.input и т.п. вызываются в constructor() сцены — Phaser создаёт их ПОСЛЕ конструктора, перенеси в create()');
+      break;
+    }
+  }
   return errors;
 }
 
