@@ -902,9 +902,10 @@ async function headlessSmoke(html) {
     });
     page.on('pageerror', e => {
       const msg = String((e && e.message) || e).slice(0, 160);
-      // Стек даёт номер строки в сгенерированном HTML — модель сможет точечно починить
-      const stackLine = (e && e.stack && e.stack.split('\n').find(l => /\.html:\d+/.test(l)) || '').trim();
-      consoleErrors.push((msg + (stackLine ? ' [' + stackLine.slice(0, 90) + ']' : '')).slice(0, 260));
+      // Стек даёт номер строки в сгенерированном HTML — модель сможет точечно починить.
+      // URL может быть about:blank/data (setContent) — ищем любую строку стека с ":NN:NN".
+      const stackLine = (e && e.stack ? e.stack.split('\n').find(l => /:\d+:\d+/.test(l) && !/^\s*at\s*(Object\.)?<anonymous>$/.test(l)) : '') || '';
+      consoleErrors.push((msg + (stackLine ? ' [' + stackLine.trim().slice(0, 100) + ']' : '')).slice(0, 280));
     });
     // preserveDrawingBuffer — чтобы readPixels работал вне кадра
     await page.evaluateOnNewDocument(() => {
@@ -1195,6 +1196,7 @@ async function generateNew(description, textures, baseCode, meta) {
         html: bestOverall.html,
         seo: parseSeo(bestOverall.html, description),
         attempts: MAX_ATTEMPTS,
+        smoke: smokeStatus,
         error: lastError || 'Ни одна попытка не прошла QA полностью',
       };
     }
@@ -1202,6 +1204,7 @@ async function generateNew(description, textures, baseCode, meta) {
       html: null,
       seo: null,
       attempts: MAX_ATTEMPTS,
+      smoke: smokeStatus,
       error: lastError || 'Генерация не удалась',
     };
   }
@@ -1225,11 +1228,12 @@ async function generateNew(description, textures, baseCode, meta) {
       attempts: MAX_ATTEMPTS,
       reviewed: false,
       smokeFallback: true,
+      smoke: 'fail',
       error: 'review/polish сломали рабочую игру, откат на версию до review:\n- ' + finalSmoke.join('\n- '),
     };
   }
 
-  return { html: final, seo: parseSeo(final, description), attempts: MAX_ATTEMPTS, reviewed: !!reviewed };
+  return { html: final, seo: parseSeo(final, description), attempts: MAX_ATTEMPTS, reviewed: !!reviewed, smoke: smokeStatus };
 }
 
 // Legacy-путь: полный HTML (улучшение существующей игры по baseCode)
