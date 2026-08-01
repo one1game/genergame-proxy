@@ -99,7 +99,7 @@ const PLAY_SCENE_PROMPT = `Ты — senior Phaser.js 3.87 разработчик
 - Цвета — ТОЛЬКО числа вида 0xRRGGBB (например 0x4a90d9), НИКОГДА строки '#RRGGBB' — setTint/fillStyle/particle tint в Phaser ждут число, строки дают чёрный/непредсказуемый цвет.
 - Текстура из BootScene: 'pixel' (белый квадрат 1x1). Свои текстуры создавай в create(): this.make.graphics()...generateTexture('key', w, h), затем this.add.image(...) с .setTint().
 - Время: this.time.addEvent({delay, callback, loop}) — НЕ setInterval.
-- Физика: this.physics.add.* / this.physics.world.enable(...). Коллизии: this.physics.add.overlap/collider.
+- Физика: this.physics.add.* / this.physics.world.enable(...). Коллизии: this.physics.add.overlap/collider — регистрируются ОДИН раз в create() (это привязка постоянного слушателя, а не разовая проверка); НИКОГДА не вызывай их в update() или в helper-методах, вызываемых из update() (checkCollisions и т.п.) — каждый вызов плодит нового слушателя (60 дублей/сек), игра трясётся и тормозит.
 
 ЗАПРЕЩЕНО (брак): setZIndex, setAnchor, setOpacity, this.add.tween, setInterval, this.sound.add. Для скруглений/цвета — make.graphics + setTint. Для анимаций — this.tweens.add. Для звука — this.sfx.play. (Примечание: setColor() легален для текста Phaser.Text, но для спрайтов его нет.)
 ЗАПРЕЩЕНО ОБЪЯВЛЯТЬ: class Music, class Juice, class SFX — эти классы уже определены в каркасе ГЛОБАЛЬНО. Используй this.music / this.sfx / Juice.* как есть, не дублируй их объявления (иначе SyntaxError: Identifier already declared).
@@ -134,7 +134,7 @@ const PLAY_SCENE_PROMPT = `Ты — senior Phaser.js 3.87 разработчик
    - не вызывай setTint/setAlpha каждый кадр без необходимости (не затирай эффекты удара);
    - звуки — только через this.sfx.* (jump/dash/collect/hit/win/over), без хардкода частот в каждом месте;
    - не оставляй мёртвый код: неиспользуемые переменные, флаги, обработчики, никогда не срабатывающие ветки;
-   - если мир шире экрана — камера ОБЯЗАНА следовать за игроком (startFollow), иначе часть уровня недостижима;
+   - если мир шире экрана — камера ОБЯЗАНА следовать за игроком (this.cameras.main.startFollow(player) строго ПОСЛЕ создания player, ОДИН раз, без дублей), иначе часть уровня недостижима;
    - тайминги согласованы: сообщение/анимация не короче отложенного рестарта.
 9. ПРОФЕССИОНАЛЬНЫЕ ПРИНЦИПЫ:
    - разбей update() на helper-методы: updatePlayer()/updateEnemies()/checkCollisions()/updateHUD() — по одному действию на метод;
@@ -161,7 +161,7 @@ const REVIEW_PROMPT = `Ты — QA-инженер по Phaser.js 3.87. Ниже 
 3. Загрузка текстур: если загружается несуществующая текстура — замени на программную генерацию (this.make.graphics() + generateTexture).
 4. Геймплей-цикл: победа/поражение реально достижимы, рестарт работает, игра не застревает.
 5. Мобильное управление: работает на тач-экране.
-6. Производительность: объекты не плодятся вечно в update().
+6. Производительность: объекты не плодятся вечно в update(). physics.add.overlap/collider — ТОЛЬКО один раз в create(), не в update() и не в helper-методах, вызываемых из update() (каждый вызов = новый слушатель, 60 дублей/сек). startFollow(объект) — только ПОСЛЕ создания объекта и без дублей.
 
 Сохрани название, теги <title>, meta description и СТРУКТУРУ КЛАССОВ (BootScene/MenuScene/PlayScene/GameOverScene + new Phaser.Game config) БЕЗ изменений. Не переписывай стиль игры — только чини баги.
 Верни ТОЛЬКО исправленный ПОЛНЫЙ HTML-код (от <!DOCTYPE html> до </html>). Без пояснений, без markdown-обёртки.`;
@@ -176,6 +176,9 @@ const POLISH_PROMPT = `Игра технически работает. Твоя 
 
 // Мультипасс: точечная самокритика лучшего кандидата ДО полной регенерации
 const CRITIQUE_PROMPT = `Ты — строгий самокритик геймплейного кода на Phaser 3.87. Ниже — ТЗ и тело PlayScene-сцены (только методы preload/create/update). Найди 3 САМЫХ СЛАБЫХ места: нереализованные механики из ТЗ, скучная/рваная сложность, отсутствие juice (Juice.shake/Juice.burst/Juice.popText), пропущенные звуки (this.sfx.*), потенциальные баги, дублирование кода. ПЕРЕПИШИ только эти фрагменты точечно. НЕ переписывай весь код и не трогай рабочие места. Сохрани сигнатуры preload()/create()/update(). Верни ТОЛЬКО исправленный код методов, без пояснений, без markdown-обёртки.
+Новые правила (исполняй буквально):
+- this.cameras.main.startFollow(объект) — строго ПОСЛЕ создания объекта (this.player = ...) и БЕЗ дублей: если правильный вызов уже есть после присваивания, УДАЛИ более ранний сломанный (первый роняет create() с TypeError: Cannot read properties of undefined).
+- physics.add.overlap/collider регистрируются ТОЛЬКО в create() и ТОЛЬКО один раз. В update() и в helper-методах, вызываемых из update() (checkCollisions и т.п.), их быть не должно — каждый вызов = новый постоянный слушатель, 60 дублей в секунду, игра трясётся и тормозит. Перенеси регистрацию в create().
 
 ОБЯЗАТЕЛЬНО при правках: проверь каждый вызов .on(, .emit(, .destroy(), .setTexture() — объект ПЕРЕД вызовом не должен быть undefined (особенно this.events, this.input, this.music, this.sfx, кастомные объекты сцены, результаты this.scene.get(...) и this.physics.add.*). Если объект может не существовать к моменту вызова — добавь проверку (if (this.xxx)) или перенеси вызов в create() до его использования. Симптом этого бага: "Cannot read properties of undefined (reading 'on')".
 Также проверь ПОРЯДОК ВЫЗОВОВ в create(): любой метод, который получает this.player/this.enemy/другой игровой объект АРГУМЕНТОМ (this.cameras.main.startFollow(this.player,...), this.physics.add.collider(...), this.physics.add.overlap(...)), должен вызываться ПОСЛЕ строки, где этот объект создаётся (this.player = this.physics.add.sprite(...) и т.п.), а не до неё. Симптом: "Cannot read properties of undefined (reading 'x')" — сцена обрывается на этой строке, остальной create() не выполняется.
@@ -663,6 +666,114 @@ function detectUndefinedMethods(body) {
   return [...unknown];
 }
 
+function lineOf(text, idx) {
+  return text.slice(0, idx).split('\n').length;
+}
+
+// Внутри какого метода класса находится позиция idx (по балансу скобок)
+// maskNonCode маскирует строки/комментарии пробелами С СОХРАНЕНИЕМ ДЛИНЫ — иначе
+// `{`/`}` внутри строк ломают подсчёт глубины (depth застревает >0).
+function maskNonCode(body) {
+  return body
+    .replace(/\/\*[\s\S]*?\*\//g, (s) => s.replace(/[^\n]/g, ' '))
+    .replace(/`(?:[^`\\]|\\.)*`/g, (s) => s.replace(/[^\n]/g, ' '))
+    .replace(/'(?:[^'\\\n]|\\.)*'/g, (s) => s.replace(/[^\n]/g, ' '))
+    .replace(/"(?:[^"\\\n]|\\.)*"/g, (s) => s.replace(/[^\n]/g, ' '))
+    .replace(/\/\/[^\n]*/g, (s) => s.replace(/[^\n]/g, ' '));
+}
+
+function methodOf(body, idx) {
+  const masked = maskNonCode(body);
+  let depth = 0;
+  let current = null;
+  let defDepth = -1;
+  let pos = 0;
+  for (const line of masked.split('\n')) {
+    if (pos >= idx) break;
+    const def = line.match(/^\s*([A-Za-z_$][\w$]*)\s*\([^)]*\)\s*\{\s*$/);
+    // Методы класса объявляются на глубине 1 (после `class X {`), top-level функции — на 0
+    if (def && (depth === 0 || depth === 1)) { current = def[1]; defDepth = depth; }
+    for (const ch of line) {
+      if (ch === '{') depth++;
+      else if (ch === '}') depth--;
+    }
+    // Метод закрыт: глубина вернулась к уровню его объявления
+    if (current && depth <= defDepth) { current = null; defDepth = -1; }
+    pos += line.length + 1;
+  }
+  return current;
+}
+
+// Позиционный детектор: startFollow(объект) ДО его создания (this.player = ...).
+// Модель иногда добавляет правильный вызов ПОСЛЕ присваивания, но не удаляет старый
+// сломанный ДО него — первый вызов роняет create() с TypeError: Cannot read
+// properties of undefined (reading 'x'). Проверка по позиции в тексте, не по смыслу.
+// Легитимный случай: объект создаётся в helper-методе (createPlayer(){ this.player = ... }),
+// который вызывается раньше startFollow — текстовый порядок ≠ порядок исполнения.
+function detectEarlyCameraFollow(body) {
+  if (!body) return [];
+  const errs = [];
+  const seen = new Set();
+  for (const m of body.matchAll(/startFollow\(\s*(?:this\.)?([A-Za-z_$][\w$]*)/g)) {
+    const name = m[1];
+    if (seen.has(name)) continue;
+    seen.add(name);
+    const assign = body.match(new RegExp(`(?:this\\.)?\\b${name}\\s*=\\s*`));
+    if (!assign) {
+      errs.push(`startFollow(${name}) — объект ${name} нигде не присваивается (создай его ДО вызова)`);
+    } else if (m.index < assign.index) {
+      // Присваивание текстом позже. Легитимно, если объект создаётся в helper-методе,
+      // который вызывается раньше (this.createPlayer(); → createPlayer(){ this.player = ... }).
+      const helper = methodOf(body, assign.index);
+      const beforeFollow = body.slice(0, m.index);
+      if (helper && helper !== 'create' && new RegExp(`this\\.${helper}\\s*\\(`).test(beforeFollow)) continue;
+      errs.push(`startFollow(${name}) вызывается РАНЬШЕ создания ${name} (строка ~${lineOf(body, m.index)}) — перенеси вызов ПОСЛЕ присваивания и удали дубль, иначе TypeError: Cannot read properties of undefined`);
+    }
+  }
+  return errs;
+}
+
+function grabMethodBody(body, name) {
+  const masked = maskNonCode(body);
+  const re = new RegExp(`(?:^|\\n)\\s*${name}\\s*\\([^)]*\\)\\s*\\{`);
+  const m = masked.match(re);
+  if (!m) return null;
+  let i = m.index + m[0].length - 1;
+  let depth = 0;
+  for (let j = i; j < masked.length; j++) {
+    const ch = masked[j];
+    if (ch === '{') depth++;
+    else if (ch === '}') { depth--; if (depth === 0) return body.slice(i, j + 1); }
+  }
+  return null;
+}
+
+// Детектор коллайдеров в update(): physics.add.overlap/collider регистрируют ПОСТОЯННЫЙ
+// слушатель, а не разовую проверку. Вызов из update() или из helper-методов, вызываемых
+// из update() (checkCollisions и т.п.), плодит 60 дублей в секунду: колбэк срабатывает
+// столько раз, сколько накопилось дублей, экран трясётся, физика со временем зависает.
+// Коллайдеры — ТОЛЬКО в create(), один раз.
+function detectCollidersInUpdate(body) {
+  if (!body) return [];
+  const errs = [];
+  const upd = grabMethodBody(body, 'update');
+  if (!upd) return errs;
+  for (const m of upd.matchAll(/physics\.add\.(overlap|collider)\(/g)) {
+    errs.push(`update() напрямую регистрирует physics.add.${m[1]}() — коллайдеры привязываются ОДИН раз в create(), вызов в update() плодит 60 дублей/сек`);
+  }
+  const called = new Set();
+  for (const m of upd.matchAll(/this\.([A-Za-z_$][\w$]*)\s*\(/g)) called.add(m[1]);
+  for (const name of called) {
+    const mb = grabMethodBody(body, name);
+    if (!mb) continue;
+    for (const m of mb.matchAll(/physics\.add\.(overlap|collider)\(/g)) {
+      errs.push(`${name}() вызывается из update() каждый кадр, но содержит physics.add.${m[1]}() — регистрируй коллайдеры ОДИН раз в create(), не в методах из update()`);
+      break;
+    }
+  }
+  return errs;
+}
+
 // ============================================================
 // Headless-смоук (puppeteer-core): ловим runtime-баги, которые vm.Script не видит
 // Открывает HTML, 5 сек автоигры (рандомные тапы), снимает console.error,
@@ -689,6 +800,7 @@ function getPuppeteer() {
 }
 
 async function headlessSmoke(html) {
+  if (process.env.SMOKE_SKIP === '1') { console.log('smoke: SKIPPED (SMOKE_SKIP=1, локальный тест)'); return 'SKIPPED'; }
   const pp = await getPuppeteer();
   if (!pp) return 'SKIPPED'; // Chromium недоступен — смоук пропускаем (видно в ответе генерации)
   const { puppeteer, executablePath, args } = pp;
@@ -856,7 +968,7 @@ async function reviewAndFix(html, description) {
       { role: 'user', content: `Игра по запросу: ${description}\n\nHTML-код игры:\n${html}` },
     ], { temperature: 0.3, max_tokens: 8192 });
     const fixed = ensureCdn(cleanHtml(raw));
-    const errs = qaHtml(fixed).concat(detectFixedApiCalls(fixed), detectColorStrings(fixed));
+    const errs = qaHtml(fixed).concat(detectFixedApiCalls(fixed), detectColorStrings(fixed), detectEarlyCameraFollow(fixed), detectCollidersInUpdate(fixed));
     if (errs.length) return null;
     return fixed;
   } catch {
@@ -872,7 +984,7 @@ async function polishPass(html, description) {
       { role: 'user', content: `Игра по запросу: ${description}\n\nHTML-код игры:\n${html}` },
     ], { temperature: 0.3, max_tokens: 8192 });
     const polished = ensureCdn(cleanHtml(raw));
-    const errs = qaHtml(polished).concat(detectFixedApiCalls(polished), detectColorStrings(polished));
+    const errs = qaHtml(polished).concat(detectFixedApiCalls(polished), detectColorStrings(polished), detectEarlyCameraFollow(polished), detectCollidersInUpdate(polished));
     if (errs.length) return null; // полировка что-то сломала — откатываем
     return polished;
   } catch {
