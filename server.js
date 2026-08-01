@@ -77,7 +77,7 @@ function specBrief(spec, description) {
     `- Сложность: ${spec.difficulty_curve}`,
     `- Мета-прогрессия: уровни: ${spec.progression?.levels || '-'}; апгрейды магазина: ${(spec.progression?.upgrades || []).join(', ') || '-'}; экономика: ${spec.progression?.economy || '-'}`,
     `- Juice (реализуй каждый): ${(spec.juice || []).join(', ')}`,
-    `- Звуки (вызывай this.sfx.play(...) на каждый): ${(spec.sound_cues || []).join(', ')}`,
+    `- Звуки (на каждый cue вызови соответствующий метод this.sfx.<cue>()): ${(spec.sound_cues || []).join(', ')}`,
     `- Палитра: ${JSON.stringify(spec.art_style?.palette || [])}, настроение: ${spec.art_style?.mood || ''}, вдохновение: ${(spec.art_style?.inspiration || []).join(', ') || '-'}`,
     `- Лимиты производительности: частицы ≤ ${spec.performance?.max_particles || 50}, враги ≤ ${spec.performance?.max_enemies || 15}`,
   ].join('\n');
@@ -89,7 +89,7 @@ function specBrief(spec, description) {
 const PLAY_SCENE_PROMPT = `Ты — senior Phaser.js 3.87 разработчик. Каркас игры УЖЕ ГОТОВ: BootScene, MenuScene, GameOverScene, класс SFX (Web Audio), рекорд в localStorage, переходы между сценами. Твоя задача — написать ТОЛЬКО геймплейную логику PlayScene.
 
 ДОСТУПНОЕ ОКРУЖЕНИЕ (используй именно так):
-- this.sfx — экземпляр класса SFX с готовыми эффектами: this.sfx.jump(), this.sfx.dash(), this.sfx.collect(), this.sfx.hit(), this.sfx.win(), this.sfx.over(). Плюс низкоуровневый this.sfx.play(freq, dur, type, vol). Вызывай нужный звук на каждое событие (прыжок/рывок/сбор/урон/победа/поражение).
+- this.sfx — экземпляр класса SFX с готовыми эффектами: this.sfx.jump(), this.sfx.dash(), this.sfx.collect(), this.sfx.hit(), this.sfx.win(), this.sfx.over(), this.sfx.levelup(), this.sfx.combo(), this.sfx.shield(), this.sfx.gameover(), this.sfx.victory(). Плюс низкоуровневый this.sfx.play(freq, dur, type, vol). Вызывай нужный звук на каждое событие.
 - this.registry.set('score', n) / this.registry.get('score') — очки. GameOverScene сама прочитает score и сохранит рекорд.
 - this.scene.start('GameOverScene') — завершение игры (победа/поражение).
 - Текстура из BootScene: 'pixel' (белый квадрат 1x1). Свои текстуры создавай в create(): this.make.graphics()...generateTexture('key', w, h), затем this.add.image(...) с .setTint().
@@ -116,7 +116,7 @@ const PLAY_SCENE_PROMPT = `Ты — senior Phaser.js 3.87 разработчик
     - свечение персонажа: player.postFX.addGlow(0x00ffff, 2, 0, false, 0.1, 10);
     - финальная точка/портал для победы (не только счётчик);
     - оверлей результата ВНУТРИ сцены: затемнение (add.rectangle с alpha) + заголовок (победа/поражение) + кнопка «ЗАНОВО» (scene.restart);
-    - мета-прогрессия: собранные кристаллы = валюта, трать её на апгрейды во время игры через Phaser-кнопки (щит/скорость/доп. прыжок/жизнь) — как внутриигровой магазин;
+    - мета-прогрессия: собранные кристаллы = валюта, трать её на апгрейды во время игры через Phaser-кнопки (щит/скорость/доп. прыжок/жизнь) — как внутриигровой магазин; валюту и купленные апгрейды сохраняй через saveProgress({currency, ownedUpgrades}) и загружай через loadProgress() — иначе прогресс сбросится при рестарте;
     - уровни: минимум 3 уровня с переходами (после сбора N кристаллов — level up: перестройка уровня, прогресс-бар, респаун на безопасной платформе, надпись «УРОВЕНЬ N»);
     - комбо-система: быстрый сбор подряд накапливает множитель (🔥 x5), показывается в HUD и затухает через пару секунд;
     - пауза: клавиша ESC + кнопка ⏸ → this.physics.pause() + оверлей «ПАУЗА» с «ПРОДОЛЖИТЬ» (this.physics.resume());
@@ -246,6 +246,8 @@ function ensureAudio(){
 document.getElementById('startScreen').addEventListener('pointerdown',function(){ensureAudio();this.style.display='none';});
 function loadHS(){try{return parseInt(localStorage.getItem('game_highscore')||'0',10);}catch(e){return 0;}}
 function saveHS(v){try{localStorage.setItem('game_highscore',String(v));}catch(e){}}
+function loadProgress(){try{return JSON.parse(localStorage.getItem('game_progress')||'{}')||{};}catch(e){return {};}}
+function saveProgress(p){try{localStorage.setItem('game_progress',JSON.stringify(p||{}));}catch(e){}}
 class SFX {
   constructor(){ this.ctx=ensureAudio(); }
   play(freq, dur, type='square', vol=0.15){
@@ -273,6 +275,11 @@ class SFX {
   hit(){ this.tone(120,0.3,'sawtooth',0.2,-60); try{if(window.Telegram?.WebApp?.HapticFeedback)window.Telegram.WebApp.HapticFeedback.impactOccurred('heavy');}catch(e){} }
   win(){ [523,659,783,1046].forEach((f,i)=>setTimeout(()=>this.tone(f,0.3,'square',0.15),i*100)); }
   over(){ this.tone(400,0.6,'sawtooth',0.4,-360); }
+  levelup(){ this.tone(660,0.1,'square',0.12,220); setTimeout(()=>this.tone(880,0.12,'square',0.12,220),80); }
+  combo(){ this.tone(980,0.08,'square',0.12,300); }
+  shield(){ this.tone(440,0.2,'sine',0.12,120); }
+  gameover(){ this.over(); }
+  victory(){ this.win(); }
 }
 function makeUiTexture(scene, key, w, h, color){
   const g = scene.make.graphics({x:0,y:0});
@@ -428,6 +435,121 @@ function legacyStructuralErrors(html) {
   return errs;
 }
 
+// ============================================================
+// QA по чек-листу SPEC: сверяем, что модель РЕАЛЬНО сделала заявленное в ТЗ
+// ============================================================
+function checkSpecCoverage(html, spec) {
+  const errs = [];
+  if (!spec) return errs;
+  (spec.sound_cues || []).forEach(cue => {
+    if (!new RegExp(`sfx\\.${cue}\\(`, 'i').test(html))
+      errs.push(`sound_cue "${cue}" из ТЗ не вызван`);
+  });
+  (spec.juice || []).forEach(j => {
+    const map = {
+      screen_shake: /cameras\.main\.shake/i,
+      particle_burst: /\.explode\(/i,
+      score_popup: /tweens\.add[\s\S]{0,80}(y|alpha)/i,
+      camera_follow: /startFollow/i,
+      trail_effect: /particles[^)]*\.(start|stop)\(|setEmitZone|\.emitter/i,
+      pulse_glow: /postFX\.addGlow|pulse|setGlow/i,
+      screen_flash: /\.flash\(|fadeIn/i,
+    };
+    if (map[j] && !map[j].test(html))
+      errs.push(`juice "${j}" заявлен в ТЗ, но не найден в коде`);
+  });
+  const premiumRe = ['shop|upgrade', 'level\\s*up|УРОВЕНЬ', 'combo|комбо', 'shield|щит', 'dash', 'pause|ПАУЗА'];
+  const premiumCount = premiumRe.filter(re => new RegExp(re, 'i').test(html)).length;
+  if (premiumCount < 4) errs.push(`премиум-фишек найдено ${premiumCount}/4 минимум`);
+  if (spec.progression && (spec.progression.economy || (spec.progression.upgrades && spec.progression.upgrades.length))) {
+    if (!/loadProgress\(|saveProgress\(/.test(html))
+      errs.push('мета-прогрессия заявлена в ТЗ, но loadProgress()/saveProgress() не используются — валюта/апгрейды сбросятся при рестарте');
+  }
+  return errs;
+}
+
+/** Скоринг кандидата: штраф за QA-ошибки и пропуски ТЗ, бонус за полноту кода */
+function candidateScore(c) {
+  return -c.errs.length * 10 - c.specMisses.length * 3 + (c.html.length / 1000);
+}
+
+// ============================================================
+// Headless-смоук (puppeteer): ловим runtime-баги, которые vm.Script не видит
+// Открывает HTML, 5 сек автоигры (рандомные тапы), снимает console.error,
+// проверяет, что canvas реально отрисовался (не пустой/однотонный).
+// Если Chromium недоступен на хосте — смоук тихо пропускается.
+// ============================================================
+let _puppeteerPromise = null;
+function getPuppeteer() {
+  if (!_puppeteerPromise) {
+    _puppeteerPromise = import('puppeteer').then(m => m.default).catch(() => null);
+  }
+  return _puppeteerPromise;
+}
+
+async function headlessSmoke(html) {
+  const puppeteer = await getPuppeteer();
+  if (!puppeteer) return null; // Chromium не установлен — смоук пропускаем
+  let browser = null;
+  try {
+    browser = await puppeteer.launch({
+      headless: true,
+      args: ['--no-sandbox', '--disable-setuid-sandbox', '--mute-audio', '--disable-dev-shm-usage', '--use-gl=swiftshader'],
+    });
+    const page = await browser.newPage();
+    const consoleErrors = [];
+    page.on('console', m => {
+      if (m.type() === 'error') {
+        const t = String(m.text() || '');
+        if (!/Failed to load resource|net::ERR_/.test(t)) consoleErrors.push(t.slice(0, 200));
+      }
+    });
+    page.on('pageerror', e => consoleErrors.push(String((e && e.message) || e).slice(0, 200)));
+    // preserveDrawingBuffer — чтобы readPixels работал вне кадра
+    await page.evaluateOnNewDocument(() => {
+      const orig = HTMLCanvasElement.prototype.getContext;
+      HTMLCanvasElement.prototype.getContext = function (type, attrs) {
+        if (/webgl/i.test(type || '')) attrs = Object.assign({ preserveDrawingBuffer: true }, attrs || {});
+        return orig.call(this, type, attrs);
+      };
+    });
+    await page.setContent(html, { waitUntil: 'load' });
+    await new Promise(r => setTimeout(r, 1500)); // ждём boot Phaser
+    for (let i = 0; i < 8; i++) { // автоигра: рандомные тапы/клики
+      await page.mouse.click(100 + Math.floor(Math.random() * 760), 100 + Math.floor(Math.random() * 340)).catch(() => {});
+      await new Promise(r => setTimeout(r, 400));
+    }
+    await new Promise(r => setTimeout(r, 1500));
+    const canvas = await page.evaluate(() => {
+      const c = document.querySelector('canvas');
+      if (!c) return { ok: false, reason: 'canvas не найден через ~5с' };
+      const gl = c.getContext('webgl') || c.getContext('experimental-webgl');
+      if (!gl) return { ok: false, reason: 'нет WebGL-контекста' };
+      const w = Math.min(c.width, 128), h = Math.min(c.height, 128);
+      const px = new Uint8Array(w * h * 4);
+      try { gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, px); }
+      catch (e) { return { ok: false, reason: 'readPixels: ' + e.message }; }
+      let nonBlack = 0, varied = 0, ref = -1;
+      for (let i = 0; i < px.length; i += 16) {
+        const v = px[i] + px[i + 1] + px[i + 2];
+        if (v > 20) nonBlack++;
+        if (ref < 0) ref = v;
+        else if (Math.abs(v - ref) > 40) varied++;
+      }
+      const ok = nonBlack > 4 && varied > 2;
+      return { ok, reason: `${nonBlack} непустых пикселей / ${varied} вариаций — ${ok ? 'ок' : 'экран пустой или однотонный'}` };
+    });
+    const errs = [];
+    if (consoleErrors.length) errs.push('SMOKE runtime: ' + consoleErrors.slice(0, 3).join(' | '));
+    if (!canvas.ok) errs.push('SMOKE canvas: ' + canvas.reason);
+    return errs.length ? errs : null;
+  } catch (e) {
+    return null; // Chromium недоступен на хосте — смоук пропускаем без падения
+  } finally {
+    if (browser) browser.close().catch(() => {});
+  }
+}
+
 function cleanHtml(content) {
   let html = content || '';
   const start = html.search(/<!\s*doctype\s+html|<html[^>]*>/i);
@@ -547,21 +669,22 @@ async function generateNew(description, textures, baseCode) {
   const baseRef = baseCode && baseCode.length > 5000 ? baseCode.slice(0, 14000) : (baseCode || undefined);
   let lastError = '';
   let best = null;
+  let bestOverall = null; // лучший по скорингу за ВСЕ попытки — фейл-бэк
 
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
-    // Best-of-2: два параллельных тела PlayScene, берём то, что прошло больше проверок
-    const [bodyA, bodyB] = await Promise.all([
-      generatePlayScene(description, spec, textures, lastError, baseRef).catch(() => null),
-      generatePlayScene(description, spec, textures, lastError, baseRef).catch(() => null),
-    ]);
+    // Best-of-3: три параллельных тела PlayScene, ранжируем по скорингу покрытия
+    const bodies = await Promise.all(
+      [0, 1, 2].map(() => generatePlayScene(description, spec, textures, lastError, baseRef).catch(() => null))
+    );
 
-    const candidates = [bodyA, bodyB].map((rawBody) => {
+    const candidates = bodies.map((rawBody) => {
       if (!rawBody) return null;
       const body = cleanPlaySceneBody(rawBody);
       if (!body) return null;
       const html = buildGameHtml(body, spec, description);
       const errs = qaHtml(html);
-      return { html, errs };
+      const specMisses = checkSpecCoverage(html, spec);
+      return { html, errs, specMisses, score: candidateScore({ html, errs, specMisses }) };
     }).filter(Boolean);
 
     if (!candidates.length) {
@@ -569,21 +692,37 @@ async function generateNew(description, textures, baseCode) {
       continue;
     }
 
-    candidates.sort((a, b) => a.errs.length - b.errs.length);
+    candidates.sort((a, b) => b.score - a.score);
     const top = candidates[0];
-    if (top.errs.length === 0) { best = top.html; break; }
-    best = top.html;
-    lastError = `Ошибки QA (${top.errs.length}):\n- ` + top.errs.join('\n- ');
+    if (!bestOverall || top.score > bestOverall.score) bestOverall = top;
+
+    if (top.errs.length === 0 && top.specMisses.length === 0) {
+      // Статика чистая — гоняем headless-смоук перед приёмкой
+      const smokeErrs = await headlessSmoke(top.html);
+      if (smokeErrs && smokeErrs.length) {
+        lastError = 'ПРЕДЫДУЩАЯ ПОПЫТКА (headless-смоук поймал runtime-баг):\n- ' + smokeErrs.join('\n- ');
+        continue;
+      }
+      best = top.html;
+      break;
+    }
+
+    lastError = 'ПРЕДЫДУЩАЯ ПОПЫТКА НЕ ПРОШЛА QA:\n- ' + [...top.errs, ...top.specMisses].join('\n- ');
   }
 
   if (!best) {
-    // Полный провал — отдаём последний сырой результат с пометкой
-    const rawBody = await generatePlayScene(description, spec, textures, '', baseRef).catch(() => null);
-    const body = rawBody ? cleanPlaySceneBody(rawBody) : null;
-    const html = body ? buildGameHtml(body, spec, description) : null;
+    // Полный провал — отдаём ЛУЧШИЙ по скорингу из всех попыток, а не последний сырой
+    if (bestOverall) {
+      return {
+        html: bestOverall.html,
+        seo: parseSeo(bestOverall.html, description),
+        attempts: MAX_ATTEMPTS,
+        error: lastError || 'Ни одна попытка не прошла QA полностью',
+      };
+    }
     return {
-      html: html || null,
-      seo: html ? parseSeo(html, description) : null,
+      html: null,
+      seo: null,
       attempts: MAX_ATTEMPTS,
       error: lastError || 'Генерация не удалась',
     };
