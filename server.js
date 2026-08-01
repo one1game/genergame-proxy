@@ -76,7 +76,7 @@ function specBrief(spec, description) {
     `- Управление: ${JSON.stringify(spec.controls || {})}`,
     `- Сложность: ${spec.difficulty_curve}`,
     `- Мета-прогрессия: уровни: ${spec.progression?.levels || '-'}; апгрейды магазина: ${(spec.progression?.upgrades || []).join(', ') || '-'}; экономика: ${spec.progression?.economy || '-'}`,
-    `- Juice (реализуй каждый): ${(spec.juice || []).join(', ')}`,
+    `- Juice (реализуй минимум половину из списка — только те, что реально работают в механиках; каждый Juice-вызов по SDK): ${(spec.juice || []).join(', ')}`,
     `- Звуки (вызови this.sfx.<cue>() минимум на половину cues — только те, что реально есть в механиках; мёртвые вызовы запрещены): ${(spec.sound_cues || []).join(', ')}`,
     `- Палитра: ${JSON.stringify(spec.art_style?.palette || [])}, настроение: ${spec.art_style?.mood || ''}, вдохновение: ${(spec.art_style?.inspiration || []).join(', ') || '-'}`,
     `- Лимиты производительности: частицы ≤ ${spec.performance?.max_particles || 50}, враги ≤ ${spec.performance?.max_enemies || 15}`,
@@ -105,7 +105,7 @@ const PLAY_SCENE_PROMPT = `Ты — senior Phaser.js 3.87 разработчик
 ОБЯЗАТЕЛЬНО:
 1. Реализуй win_condition и lose_condition из ТЗ и проверяй их в update()/событиях — иначе юзер застрянет навсегда.
 2. Реализуй difficulty_curve буквально (ускорение/рост числа врагов через this.time.addEvent или счётчик).
-3. Реализуй КАЖДЫЙ juice из ТЗ вызовами Juice SDK: Juice.shake(this) для screen_shake, Juice.burst(this,x,y,color) для particle_burst, Juice.popText(this,x,y,text,color) для score_popup, Juice.comboFlash(this,x,y,mult) для комбо. Не создавай собственные эмиттеры/твины для этих эффектов.
+3. Реализуй минимум половину juice из ТЗ вызовами Juice SDK: Juice.shake(this) для screen_shake, Juice.burst(this,x,y,color) для particle_burst, Juice.popText(this,x,y,text,color) для score_popup, Juice.comboFlash(this,x,y,mult) для комбо. Не создавай собственные эмиттеры/твины для этих эффектов.
 4. Вызывай this.sfx.play(...) на КАЖДЫЙ sound_cue из ТЗ, который соответствует реализованной механике (минимум половина; мёртвые вызовы несуществующих механик запрещены).
 5. Мобильное управление — Phaser-тексты-кнопки (◀ ▶ ▲ DASH) с .setInteractive(), флаги виртуальных клавиш и разбор в update(), без HTML-оверлеев.
 6. ПРЕМИУМ-ФИШКИ (делай минимум 4):
@@ -558,19 +558,20 @@ function checkSpecCoverage(html, spec) {
   const missing = cues.filter(cue => !new RegExp(`sfx\\.${cue}\\(`, 'i').test(html));
   if (cues.length > 0 && missing.length > cues.length / 2)
     errs.push(`звуки: из ${cues.length} cues ТЗ вызвано меньше половины (не найдены: ${missing.join(', ')})`);
-  (spec.juice || []).forEach(j => {
-    const map = {
-      screen_shake: /Juice\.shake\(|cameras\.main\.shake/i,
-      particle_burst: /Juice\.burst\(|\.explode\(/i,
-      score_popup: /Juice\.popText\(|tweens\.add[\s\S]{0,80}(y|alpha)/i,
-      camera_follow: /startFollow/i,
-      trail_effect: /particles[^)]*\.(start|stop)\(|setEmitZone|\.emitter/i,
-      pulse_glow: /postFX\.addGlow|pulse|setGlow/i,
-      screen_flash: /\.flash\(|fadeIn/i,
-    };
-    if (map[j] && !map[j].test(html))
-      errs.push(`juice "${j}" заявлен в ТЗ, но не найден в коде`);
-  });
+  // Juice: как и со звуками — требуем большинство, а не все (juice-список из ТЗ это
+  // wish-list; часть эффектов легитимно не подходит под механику конкретной игры)
+  const juiceMap = {
+    screen_shake: /Juice\.shake\(|cameras\.main\.shake/i,
+    particle_burst: /Juice\.burst\(|\.explode\(/i,
+    score_popup: /Juice\.popText\(|tweens\.add[\s\S]{0,80}(y|alpha)/i,
+    camera_follow: /startFollow/i,
+    trail_effect: /particles[^)]*\.(start|stop)\(|setEmitZone|\.emitter/i,
+    pulse_glow: /postFX\.addGlow|pulse|setGlow/i,
+    screen_flash: /\.flash\(|fadeIn/i,
+  };
+  const juiceMisses = (spec.juice || []).filter(j => juiceMap[j] ? !juiceMap[j].test(html) : false);
+  if ((spec.juice || []).length > 0 && juiceMisses.length > (spec.juice || []).length / 2)
+    errs.push(`juice: из ${(spec.juice || []).length} заявленных реализовано меньше половины (не найдены: ${juiceMisses.join(', ')})`);
   const premiumRe = ['shop|upgrade', 'level\\s*up|УРОВЕНЬ', 'combo|комбо', 'shield|щит', 'dash', 'pause|ПАУЗА'];
   const premiumCount = premiumRe.filter(re => new RegExp(re, 'i').test(html)).length;
   if (premiumCount < 4) errs.push(`премиум-фишек найдено ${premiumCount}/4 минимум`);
