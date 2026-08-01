@@ -95,7 +95,8 @@ const PLAY_SCENE_PROMPT = `Ты — senior Phaser.js 3.87 разработчик
 - Готовые эффекты (Juice SDK) — НЕ пиши партиклы/тряску/попапы руками, вызывай: Juice.shake(this, intensity), Juice.burst(this, x, y, color, n), Juice.popText(this, x, y, text, color), Juice.comboFlash(this, x, y, mult). Это фирменный стиль игры. ВАЖНО: Juice.shake(this, intensity) — intensity в диапазоне 0.005–0.05 (доля экрана), НЕ пиксели: сильный удар 0.04–0.05, обычный 0.015–0.025, лёгкий 0.005–0.01. Никогда не передавай 5–20.
 - Музыка: this.music = new Music(); this.music.start() — генеративный саундтрек уже готов; this.music.setTempo(bpm) — ускоряй темп по difficulty_curve (например 96 + level*12). Никогда не создавай второй экземпляр Music.
 - Уровень: генерируй мир через this.rng (this.rng.between(a,b), this.rng.pick(arr), this.rng.frac()) и this.seed — НЕ через Math.random. Покажи this.seed в HUD как '#seed' — у каждого юзера свой воспроизводимый уровень.
-- Существа: makeCreature(this, 'key', seed, [c1,c2,c3]) — процедурный спрайт из примитивов (мягкий блоб, не квадрат) для игрока/врагов; палитру бери из art_style.palette.
+- Существа: makeCreature(this, 'key', seed, [c1,c2,c3]) — создаёт процедурный спрайт из примитивов (мягкий блоб, не квадрат) для игрока/врагов; палитру бери из art_style.palette. ВАЖНО: makeCreature() возвращает готовый Arcade-спрайт (this.physics.add.sprite) на позиции (0,0) — присваивай результат (const s = makeCreature(...)) и сразу ставь позицию (s.setPosition(x,y)); при желании добавь в физику (this.physics.add.existing(s), body.setCollideWorldBounds и т.п. — он уже Arcade-спрайт).
+- Цвета — ТОЛЬКО числа вида 0xRRGGBB (например 0x4a90d9), НИКОГДА строки '#RRGGBB' — setTint/fillStyle/particle tint в Phaser ждут число, строки дают чёрный/непредсказуемый цвет.
 - Текстура из BootScene: 'pixel' (белый квадрат 1x1). Свои текстуры создавай в create(): this.make.graphics()...generateTexture('key', w, h), затем this.add.image(...) с .setTint().
 - Время: this.time.addEvent({delay, callback, loop}) — НЕ setInterval.
 - Физика: this.physics.add.* / this.physics.world.enable(...). Коллизии: this.physics.add.overlap/collider.
@@ -177,7 +178,8 @@ const POLISH_PROMPT = `Игра технически работает. Твоя 
 const CRITIQUE_PROMPT = `Ты — строгий самокритик геймплейного кода на Phaser 3.87. Ниже — ТЗ и тело PlayScene-сцены (только методы preload/create/update). Найди 3 САМЫХ СЛАБЫХ места: нереализованные механики из ТЗ, скучная/рваная сложность, отсутствие juice (Juice.shake/Juice.burst/Juice.popText), пропущенные звуки (this.sfx.*), потенциальные баги, дублирование кода. ПЕРЕПИШИ только эти фрагменты точечно. НЕ переписывай весь код и не трогай рабочие места. Сохрани сигнатуры preload()/create()/update(). Верни ТОЛЬКО исправленный код методов, без пояснений, без markdown-обёртки.
 
 ОБЯЗАТЕЛЬНО при правках: проверь каждый вызов .on(, .emit(, .destroy(), .setTexture() — объект ПЕРЕД вызовом не должен быть undefined (особенно this.events, this.input, this.music, this.sfx, кастомные объекты сцены, результаты this.scene.get(...) и this.physics.add.*). Если объект может не существовать к моменту вызова — добавь проверку (if (this.xxx)) или перенеси вызов в create() до его использования. Симптом этого бага: "Cannot read properties of undefined (reading 'on')".
-Также проверь ПОРЯДОК ВЫЗОВОВ в create(): любой метод, который получает this.player/this.enemy/другой игровой объект АРГУМЕНТОМ (this.cameras.main.startFollow(this.player,...), this.physics.add.collider(...), this.physics.add.overlap(...)), должен вызываться ПОСЛЕ строки, где этот объект создаётся (this.player = this.physics.add.sprite(...) и т.п.), а не до неё. Симптом: "Cannot read properties of undefined (reading 'x')" — сцена обрывается на этой строке, остальной create() не выполняется.`;
+Также проверь ПОРЯДОК ВЫЗОВОВ в create(): любой метод, который получает this.player/this.enemy/другой игровой объект АРГУМЕНТОМ (this.cameras.main.startFollow(this.player,...), this.physics.add.collider(...), this.physics.add.overlap(...)), должен вызываться ПОСЛЕ строки, где этот объект создаётся (this.player = this.physics.add.sprite(...) и т.п.), а не до неё. Симптом: "Cannot read properties of undefined (reading 'x')" — сцена обрывается на этой строке, остальной create() не выполняется.
+Также проверь СКОУП ПЕРЕМЕННЫХ в helper-методах (updatePlayer(delta), updateEnemies(delta) и т.п.): каждая переменная, используемая внутри метода, должна быть либо его параметром, либо this-свойством, либо объявлена внутри. НИКОГДА не используй переменные из сигнатуры update(time, delta) (time/delta) внутри метода, которому они не переданы. Если нужен time — передай его параметром (updatePlayer(time, delta)) или используй this.time.now. Симптом: "ReferenceError: time is not defined" — краш при первом же вызове метода.`;
 
 // Самокритика: дешевле полной регенерации. Мусор на выходе — откат к оригиналу.
 async function selfCritique(body, spec, description, issues) {
@@ -338,6 +340,7 @@ function makeCreature(scene, key, seed, palette){
   g.fillStyle(c[1],1);
   g.fillRect(s/2-6,s/2+8,4,rng.between(6,10)); g.fillRect(s/2+3,s/2+8,4,rng.between(6,10));
   g.generateTexture(key,s,s); g.destroy();
+  return scene.physics.add.sprite(0,0,key);
 }
 class SFX {
   constructor(){ this.ctx=ensureAudio(); }
@@ -624,6 +627,22 @@ function detectFixedApiCalls(body) {
   return errs;
 }
 
+// Детектор строк-цветов: модель пишет '#RRGGBB' вместо 0xRRGGBB в Phaser API
+// (setTint/fillStyle/particle tint ждут число). Строки дают чёрный/непредсказуемый цвет.
+function detectColorStrings(body) {
+  if (!body) return [];
+  const errs = [];
+  const re = /(?:setTint|setFillStyle|fillStyle|tint)\s*\(\s*['"]#[0-9a-fA-F]{6}['"]/g;
+  for (const m of body.matchAll(re)) {
+    errs.push(`Цвет строкой вместо числа: ${m[0].trim()} — используй 0xRRGGBB (например 0x4a90d9), а не '#RRGGBB'`);
+  }
+  const reBurst = /Juice\.burst\([^)]*['"]#[0-9a-fA-F]{6}['"]/g;
+  for (const m of body.matchAll(reBurst)) {
+    errs.push(`Juice.burst цвет строкой: ${m[0].trim().slice(0, 60)} — передавай число 0xRRGGBB`);
+  }
+  return errs;
+}
+
 function detectUndefinedMethods(body) {
   if (!body) return [];
   const methods = new Set(['constructor']);
@@ -837,7 +856,7 @@ async function reviewAndFix(html, description) {
       { role: 'user', content: `Игра по запросу: ${description}\n\nHTML-код игры:\n${html}` },
     ], { temperature: 0.3, max_tokens: 8192 });
     const fixed = ensureCdn(cleanHtml(raw));
-    const errs = qaHtml(fixed).concat(detectFixedApiCalls(fixed));
+    const errs = qaHtml(fixed).concat(detectFixedApiCalls(fixed), detectColorStrings(fixed));
     if (errs.length) return null;
     return fixed;
   } catch {
@@ -853,7 +872,7 @@ async function polishPass(html, description) {
       { role: 'user', content: `Игра по запросу: ${description}\n\nHTML-код игры:\n${html}` },
     ], { temperature: 0.3, max_tokens: 8192 });
     const polished = ensureCdn(cleanHtml(raw));
-    const errs = qaHtml(polished).concat(detectFixedApiCalls(polished));
+    const errs = qaHtml(polished).concat(detectFixedApiCalls(polished), detectColorStrings(polished));
     if (errs.length) return null; // полировка что-то сломала — откатываем
     return polished;
   } catch {
@@ -893,8 +912,9 @@ async function generateNew(description, textures, baseCode, meta) {
       const unknownMethods = detectUndefinedMethods(body)
         .map(n => `Метод this.${n}() вызывается, но не определён в классе PlayScene — добавь его реализацию (или удали вызов)`);
       const fixedApiErrs = detectFixedApiCalls(body);
+      const colorErrs = detectColorStrings(body);
       const specMisses = checkSpecCoverage(html, spec);
-      const allErrs = [...errs, ...unknownMethods, ...fixedApiErrs];
+      const allErrs = [...errs, ...unknownMethods, ...fixedApiErrs, ...colorErrs];
       return { html, body, errs: allErrs, specMisses, score: candidateScore({ html, errs: allErrs, specMisses }) };
     }).filter(Boolean);
 
