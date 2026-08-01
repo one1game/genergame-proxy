@@ -1174,6 +1174,18 @@ async function generateNew(description, textures, baseCode, meta) {
           error: (lastError || '') + '\n\nЛучшая попытка синтаксически битая: ' + syntaxErr,
         };
       }
+      // Fallback тоже гейтим headless-смоуком: синтаксически валидная игра может
+      // крашиться в рантайме (неопределённые методы, порядок инициализации) —
+      // битую игру НЕ отдаём, честный error лучше краша у юзера.
+      const smokeErrs = await headlessSmoke(bestOverall.html);
+      if (smokeErrs && smokeErrs !== 'SKIPPED' && smokeErrs.length) {
+        return {
+          html: null,
+          seo: null,
+          attempts: MAX_ATTEMPTS,
+          error: (lastError || '') + '\n\nЛучшая попытка падает в headless-смоуке:\n- ' + smokeErrs.join('\n- '),
+        };
+      }
       return {
         html: bestOverall.html,
         seo: parseSeo(bestOverall.html, description),
