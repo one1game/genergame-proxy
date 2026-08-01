@@ -19,22 +19,29 @@ const DS_TIMEOUT = 120_000; // 2 мин
 // ============================================================
 // СТАДИЯ A — SPEC (JSON-бриф вместо расплывчатой фразы)
 // ============================================================
-const SPEC_SYSTEM_PROMPT = `Ты — геймдизайнер. По короткому описанию юзера составь ПОЛНОЕ техническое задание для 2D HTML5-игры на Phaser 3.
-Не меняй идею юзера. Если чего-то не хватает (тема визуала, конкретная механика усложнения, звуковой стиль) — придумай в тон его идее, не делай дженерик.
+const SPEC_SYSTEM_PROMPT = `Ты — геймдизайнер и архитектор игр. По короткому описанию юзера составь ПОЛНОЕ техническое задание для 2D HTML5-игры на Phaser 3.
+Не меняй идею юзера. Если чего-то не хватает (тема визуала, конкретная механика усложнения, звуковой стиль, мета-прогрессия) — придумай в тон его идее, не делай дженерик.
+Учти производительность на мобильных, продумай баланс сложности, добавь визуальные «соки» (juice).
 
 Верни ТОЛЬКО JSON без пояснений, строго такой структуры:
 {
   "title": "название на русском",
-  "genre": "platformer|shooter|runner|puzzle|arcade|tower_defense|match3",
-  "core_loop": "что игрок делает каждые несколько секунд, 1 фраза",
-  "win_condition": "конкретное измеримое условие победы",
+  "genre": "platformer|shooter|runner|puzzle|arcade|tower_defense|match3|rhythm|survival",
+  "core_loop": "что игрок делает каждые 3-5 секунд, 1 фраза",
+  "win_condition": "конкретное измеримое условие победы (число/время/прогресс)",
   "lose_condition": "конкретное измеримое условие поражения",
-  "entities": [{"name":"","role":"player|enemy|hazard|pickup|projectile","behavior":""}],
-  "controls": {"desktop":"","mobile":"tap|joystick|swipe|buttons"},
-  "difficulty_curve": "формула нарастания сложности со временем/очками",
-  "juice": ["screen_shake_on_hit","particle_burst_on_collect","score_popup"],
-  "sound_cues": ["jump","hit","collect","gameover"],
-  "art_style": {"palette":["#hex","#hex","#hex"], "mood":""},
+  "progression": {
+    "levels": "количество и структура уровней (минимум 3)",
+    "upgrades": ["список улучшений для внутриигрового магазина"],
+    "economy": "как работает валюта (что собираем, на что тратим)"
+  },
+  "entities": [{"name":"","role":"player|enemy|hazard|pickup|projectile|platform|powerup","behavior":""}],
+  "controls": {"desktop":"","mobile":"tap|joystick|swipe|buttons","special":"дополнительные жесты/клавиши"},
+  "difficulty_curve": "формула или описание роста сложности со временем/очками",
+  "juice": ["screen_shake","particle_burst","score_popup","trail_effect","pulse_glow","screen_flash","camera_follow"],
+  "sound_cues": ["jump","hit","collect","gameover","victory","levelup","combo","shield"],
+  "art_style": {"palette":["#hex","#hex","#hex","#hex"], "mood":"", "inspiration":["игра1","игра2"]},
+  "performance": {"max_particles": 50, "max_enemies": 15, "optimizations":["object_pooling","cached_gradients"]},
   "scenes": ["BootScene","MenuScene","PlayScene","GameOverScene"]
 }`;
 
@@ -68,9 +75,11 @@ function specBrief(spec, description) {
     `- Сущности: ${(spec.entities || []).map(e => `${e.name} (${e.role}): ${e.behavior}`).join('; ') || '-'}`,
     `- Управление: ${JSON.stringify(spec.controls || {})}`,
     `- Сложность: ${spec.difficulty_curve}`,
+    `- Мета-прогрессия: уровни: ${spec.progression?.levels || '-'}; апгрейды магазина: ${(spec.progression?.upgrades || []).join(', ') || '-'}; экономика: ${spec.progression?.economy || '-'}`,
     `- Juice (реализуй каждый): ${(spec.juice || []).join(', ')}`,
     `- Звуки (вызывай this.sfx.play(...) на каждый): ${(spec.sound_cues || []).join(', ')}`,
-    `- Палитра: ${JSON.stringify(spec.art_style?.palette || [])}, настроение: ${spec.art_style?.mood || ''}`,
+    `- Палитра: ${JSON.stringify(spec.art_style?.palette || [])}, настроение: ${spec.art_style?.mood || ''}, вдохновение: ${(spec.art_style?.inspiration || []).join(', ') || '-'}`,
+    `- Лимиты производительности: частицы ≤ ${spec.performance?.max_particles || 50}, враги ≤ ${spec.performance?.max_enemies || 15}`,
   ].join('\n');
 }
 
