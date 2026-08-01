@@ -1117,8 +1117,11 @@ async function generateNew(description, textures, baseCode, meta) {
       const colliderErrs = detectCollidersInUpdate(body);
       const windowClassErrs = detectWindowClassAccess(body);
       const doublePhysErrs = detectDoublePhysicsAdd(body);
+      const undefHpErrs = detectUndefinedHp(body);
+      const seedOverErrs = detectSeedOverride(body);
+      const registryErrs = detectRegistryScore(body);
       const specMisses = checkSpecCoverage(html, spec);
-      const allErrs = [...errs, ...unknownMethods, ...fixedApiErrs, ...colorErrs, ...earlyFollowErrs, ...colliderErrs, ...windowClassErrs, ...doublePhysErrs];
+      const allErrs = [...errs, ...unknownMethods, ...fixedApiErrs, ...colorErrs, ...earlyFollowErrs, ...colliderErrs, ...windowClassErrs, ...doublePhysErrs, ...undefHpErrs, ...seedOverErrs, ...registryErrs];
       return { html, body, errs: allErrs, specMisses, score: candidateScore({ html, errs: allErrs, specMisses }) };
     }).filter(Boolean);
 
