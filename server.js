@@ -402,6 +402,23 @@ function qaHtml(html) {
   return errs;
 }
 
+// Структурные проверки для legacy-генераций (монолит, нет скелетона)
+function legacyStructuralErrors(html) {
+  const errs = [];
+  // Мир шире экрана: setBounds/координаты уровня > 1500, но нет камеры-фоллоу
+  const hasWideWorld = /world\.setBounds\([^)]*,[^)]*,\s*[12]\d{3,}/.test(html)
+    || /Between\(\s*-?\d+,\s*[12]\d{3,}/.test(html)
+    || /level\s*=\s*\[[^\]]*[12]\d{3,}/.test(html);
+  if (hasWideWorld && !/startFollow/.test(html)) {
+    errs.push('камера не следует за игроком: мир шире экрана (>1500px) — добавь this.cameras.main.setBounds(0,0,W,H) и this.cameras.main.startFollow(player), иначе часть уровня недостижима');
+  }
+  // localStorage без try/catch
+  if (/localStorage\.(get|set)Item/.test(html) && !/catch\s*\(/.test(html)) {
+    errs.push('localStorage используется без try/catch — оберни все чтения/записи в try/catch');
+  }
+  return errs;
+}
+
 function cleanHtml(content) {
   let html = content || '';
   const start = html.search(/<!\s*doctype\s+html|<html[^>]*>/i);
@@ -577,7 +594,7 @@ async function generateLegacy(description, textures, baseCode) {
       { role: 'user', content: userPrompt },
     ]);
     let html = ensureCdn(cleanHtml(raw));
-    const errs = qaHtml(html);
+    const errs = qaHtml(html).concat(legacyStructuralErrors(html));
     if (!errs.length) {
       const fixed = (await reviewAndFix(html, description)) || html;
       const polished = (await polishPass(fixed, description)) || fixed;
