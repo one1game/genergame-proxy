@@ -643,7 +643,9 @@ async function headlessSmoke(html) {
     browser = await puppeteer.launch({
       executablePath,
       headless: true,
-      args: [...(args || []), '--no-sandbox', '--disable-setuid-sandbox', '--mute-audio', '--disable-dev-shm-usage', '--use-gl=swiftshader'],
+      // single-process/no-zygote: контейнерные рантаймы (Render) блокируют создание
+      // дочерних процессов — без этого Chromium мгновенно умирает с "Target closed"
+      args: [...(args || []), '--no-sandbox', '--disable-setuid-sandbox', '--mute-audio', '--disable-dev-shm-usage', '--single-process', '--no-zygote', '--headless=new', '--enable-unsafe-swiftshader'],
     });
     const page = await browser.newPage();
     const consoleErrors = [];
@@ -673,20 +675,35 @@ async function headlessSmoke(html) {
       const c = document.querySelector('canvas');
       if (!c) return { ok: false, reason: 'canvas не найден через ~5с' };
       const gl = c.getContext('webgl') || c.getContext('experimental-webgl');
-      if (!gl) return { ok: false, reason: 'нет WebGL-контекста' };
+      if (gl) {
+        const w = Math.min(c.width, 128), h = Math.min(c.height, 128);
+        const px = new Uint8Array(w * h * 4);
+        try { gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, px); }
+        catch (e) { return { ok: false, reason: 'readPixels: ' + e.message }; }
+        let nonBlack = 0, varied = 0, ref = -1;
+        for (let i = 0; i < px.length; i += 16) {
+          const v = px[i] + px[i + 1] + px[i + 2];
+          if (v > 20) nonBlack++;
+          if (ref < 0) ref = v;
+          else if (Math.abs(v - ref) > 40) varied++;
+        }
+        const ok = nonBlack > 4 && varied > 2;
+        return { ok, reason: `${nonBlack} непустых пикселей / ${varied} вариаций — ${ok ? 'ок' : 'экран пустой или однотонный'}` };
+      }
+      // WebGL нет (Phaser упал на Canvas-рендерер) — проверяем пиксели через 2D
+      const ctx = c.getContext('2d');
+      if (!ctx) return { ok: false, reason: 'нет ни WebGL, ни 2D-контекста' };
       const w = Math.min(c.width, 128), h = Math.min(c.height, 128);
-      const px = new Uint8Array(w * h * 4);
-      try { gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, px); }
-      catch (e) { return { ok: false, reason: 'readPixels: ' + e.message }; }
+      const data = ctx.getImageData(0, 0, w, h).data;
       let nonBlack = 0, varied = 0, ref = -1;
-      for (let i = 0; i < px.length; i += 16) {
-        const v = px[i] + px[i + 1] + px[i + 2];
+      for (let i = 0; i < data.length; i += 16) {
+        const v = data[i] + data[i + 1] + data[i + 2];
         if (v > 20) nonBlack++;
         if (ref < 0) ref = v;
         else if (Math.abs(v - ref) > 40) varied++;
       }
       const ok = nonBlack > 4 && varied > 2;
-      return { ok, reason: `${nonBlack} непустых пикселей / ${varied} вариаций — ${ok ? 'ок' : 'экран пустой или однотонный'}` };
+      return { ok, reason: `2D: ${nonBlack} непустых пикселей / ${varied} вариаций — ${ok ? 'ок' : 'экран пустой или однотонный'}` };
     });
     const errs = [];
     if (consoleErrors.length) errs.push('SMOKE runtime: ' + consoleErrors.slice(0, 3).join(' | '));
