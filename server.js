@@ -94,6 +94,7 @@ const PLAY_SCENE_PROMPT = `Ты — senior Phaser.js 3.87 разработчик
 - this.scene.start('GameOverScene') — завершение игры (победа/поражение).
 - Готовые эффекты (Juice SDK) — НЕ пиши партиклы/тряску/попапы руками, вызывай: Juice.shake(this, intensity), Juice.burst(this, x, y, color, n), Juice.popText(this, x, y, text, color), Juice.comboFlash(this, x, y, mult). Это фирменный стиль игры. ВАЖНО: Juice.shake(this, intensity) — intensity в диапазоне 0.005–0.05 (доля экрана), НЕ пиксели: сильный удар 0.04–0.05, обычный 0.015–0.025, лёгкий 0.005–0.01. Никогда не передавай 5–20.
 - Музыка: this.music = new Music(); this.music.start() — генеративный саундтрек уже готов; this.music.setTempo(bpm) — ускоряй темп по difficulty_curve (например 96 + level*12). Никогда не создавай второй экземпляр Music.
+- Фирменный визуал: в самом начале create() вызови applyPostFX(this.cameras.main) — bloom+vignette (функция уже в каркасе). ЗАПРЕЩЕНО звать её и любые методы сцены (this.events.on, this.cameras, this.input и т.п.) в constructor() — они существуют только после boot сцены, в конструкторе это краш "undefined.on".
 - Уровень: генерируй мир через this.rng (this.rng.between(a,b), this.rng.pick(arr), this.rng.frac()) и this.seed — НЕ через Math.random. Покажи this.seed в HUD как '#seed' — у каждого юзера свой воспроизводимый уровень.
 - Существа: makeCreature(this, 'key', seed, [c1,c2,c3]) — создаёт процедурный спрайт из примитивов (мягкий блоб, не квадрат) для игрока/врагов; палитру бери из art_style.palette. ВАЖНО: makeCreature() возвращает ГОТОВЫЙ Arcade-спрайт (this.physics.add.sprite) с телом физики — присваивай результат (const s = makeCreature(...)), ставь позицию (s.setPosition(x,y)) и настраивай тело (s.body.setCollideWorldBounds(true) и т.п.). НИКОГДА не зови this.physics.add.existing(s) на объекты из makeCreature — повторная регистрация пересоздаёт body (неопределённое поведение). physics.add.existing — только для объектов БЕЗ физики (this.add.rectangle, this.add.image и т.п.).
 - Цвета — ТОЛЬКО числа вида 0xRRGGBB (например 0x4a90d9), НИКОГДА строки '#RRGGBB' — setTint/fillStyle/particle tint в Phaser ждут число, строки дают чёрный/непредсказуемый цвет.
@@ -468,7 +469,6 @@ class PlayScene extends Phaser.Scene {
     saveProgress(Object.assign({}, prog, { seed: this.seed }));
     this.rng = new Phaser.Math.RandomDataGenerator(String(this.seed));
     this.music = new Music();
-    this.events.on('create', () => applyPostFX(this.cameras.main));
   }
   shutdown(){ if (this.music) this.music.stop(); }
 ${playSceneBody}
@@ -900,13 +900,7 @@ async function headlessSmoke(html) {
         if (!/Failed to load resource|net::ERR_/.test(t)) consoleErrors.push(t.slice(0, 200));
       }
     });
-    page.on('pageerror', e => {
-      const msg = String((e && e.message) || e).slice(0, 160);
-      // Стек даёт номер строки в сгенерированном HTML — модель сможет точечно починить.
-      // URL может быть about:blank/data (setContent) — ищем любую строку стека с ":NN:NN".
-      const stackLine = (e && e.stack ? e.stack.split('\n').find(l => /:\d+:\d+/.test(l) && !/^\s*at\s*(Object\.)?<anonymous>$/.test(l)) : '') || '';
-      consoleErrors.push((msg + (stackLine ? ' [' + stackLine.trim().slice(0, 100) + ']' : '')).slice(0, 280));
-    });
+    page.on('pageerror', e => consoleErrors.push(String((e && e.message) || e).slice(0, 200)));
     // preserveDrawingBuffer — чтобы readPixels работал вне кадра
     await page.evaluateOnNewDocument(() => {
       const orig = HTMLCanvasElement.prototype.getContext;
@@ -1123,11 +1117,8 @@ async function generateNew(description, textures, baseCode, meta) {
       const colliderErrs = detectCollidersInUpdate(body);
       const windowClassErrs = detectWindowClassAccess(body);
       const doublePhysErrs = detectDoublePhysicsAdd(body);
-      const undefHpErrs = detectUndefinedHp(body);
-      const seedOverErrs = detectSeedOverride(body);
-      const registryErrs = detectRegistryScore(body);
       const specMisses = checkSpecCoverage(html, spec);
-      const allErrs = [...errs, ...unknownMethods, ...fixedApiErrs, ...colorErrs, ...earlyFollowErrs, ...colliderErrs, ...windowClassErrs, ...doublePhysErrs, ...undefHpErrs, ...seedOverErrs, ...registryErrs];
+      const allErrs = [...errs, ...unknownMethods, ...fixedApiErrs, ...colorErrs, ...earlyFollowErrs, ...colliderErrs, ...windowClassErrs, ...doublePhysErrs];
       return { html, body, errs: allErrs, specMisses, score: candidateScore({ html, errs: allErrs, specMisses }) };
     }).filter(Boolean);
 
@@ -1180,24 +1171,10 @@ async function generateNew(description, textures, baseCode, meta) {
           error: (lastError || '') + '\n\nЛучшая попытка синтаксически битая: ' + syntaxErr,
         };
       }
-      // Fallback тоже гейтим headless-смоуком: синтаксически валидная игра может
-      // крашиться в рантайме (неопределённые методы, порядок инициализации) —
-      // битую игру НЕ отдаём, честный error лучше краша у юзера.
-      const smokeErrs = await headlessSmoke(bestOverall.html);
-      if (smokeErrs && smokeErrs !== 'SKIPPED' && smokeErrs.length) {
-        return {
-          html: null,
-          seo: null,
-          attempts: MAX_ATTEMPTS,
-          diagnosticHtml: bestOverall.html,
-          error: (lastError || '') + '\n\nЛучшая попытка падает в headless-смоуке:\n- ' + smokeErrs.join('\n- '),
-        };
-      }
       return {
         html: bestOverall.html,
         seo: parseSeo(bestOverall.html, description),
         attempts: MAX_ATTEMPTS,
-        smoke: smokeStatus,
         error: lastError || 'Ни одна попытка не прошла QA полностью',
       };
     }
@@ -1205,7 +1182,6 @@ async function generateNew(description, textures, baseCode, meta) {
       html: null,
       seo: null,
       attempts: MAX_ATTEMPTS,
-      smoke: smokeStatus,
       error: lastError || 'Генерация не удалась',
     };
   }
@@ -1229,12 +1205,11 @@ async function generateNew(description, textures, baseCode, meta) {
       attempts: MAX_ATTEMPTS,
       reviewed: false,
       smokeFallback: true,
-      smoke: 'fail',
       error: 'review/polish сломали рабочую игру, откат на версию до review:\n- ' + finalSmoke.join('\n- '),
     };
   }
 
-  return { html: final, seo: parseSeo(final, description), attempts: MAX_ATTEMPTS, reviewed: !!reviewed, smoke: smokeStatus };
+  return { html: final, seo: parseSeo(final, description), attempts: MAX_ATTEMPTS, reviewed: !!reviewed };
 }
 
 // Legacy-путь: полный HTML (улучшение существующей игры по baseCode)
@@ -1351,12 +1326,7 @@ const server = createServer(async (req, res) => {
     if (!result.html) {
       // Телеметрия: фиксируем фейл в БД, чтобы статистика ошибок была реальной (а не только в логах)
       try {
-        await updateGame(job.gameId, {
-          status: 'failed',
-          error_message: String(result.error || 'Generation failed').slice(0, 500),
-          // Диагностика: сохраняем лучшую попытку даже при провале — по ней видно строку краша
-          source_code: result.diagnosticHtml || null,
-        });
+        await updateGame(job.gameId, { status: 'failed', error_message: String(result.error || 'Generation failed').slice(0, 500) });
       } catch (_) { /* не критично для ответа */ }
       res.writeHead(500, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ error: result.error || 'Generation failed' }));
