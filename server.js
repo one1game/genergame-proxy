@@ -101,6 +101,7 @@ const PLAY_SCENE_PROMPT = `Ты — senior Phaser.js 3.87 разработчик
 - Физика: this.physics.add.* / this.physics.world.enable(...). Коллизии: this.physics.add.overlap/collider.
 
 ЗАПРЕЩЕНО (брак): setColor, setZIndex, setAnchor, setOpacity, this.add.tween, setInterval, this.sound.add. Для скруглений/цвета — make.graphics + setTint. Для анимаций — this.tweens.add. Для звука — this.sfx.play.
+ЗАПРЕЩЕНО ОБЪЯВЛЯТЬ: class Music, class Juice, class SFX — эти классы уже определены в каркасе ГЛОБАЛЬНО. Используй this.music / this.sfx / Juice.* как есть, не дублируй их объявления (иначе SyntaxError: Identifier already declared).
 
 ОБЯЗАТЕЛЬНО:
 1. Реализуй win_condition и lose_condition из ТЗ и проверяй их в update()/событиях — иначе юзер застрянет навсегда.
@@ -899,8 +900,18 @@ async function generateNew(description, textures, baseCode, meta) {
   }
 
   if (!best) {
-    // Полный провал — отдаём ЛУЧШИЙ по скорингу из всех попыток, а не последний сырой
+    // Полный провал — отдаём ЛУЧШИЙ по скорингу из всех попыток, но НЕ если он
+    // синтаксически битый: такая игра не запустится вообще, честный 500 лучше фейка
     if (bestOverall) {
+      const syntaxErr = checkSyntax(bestOverall.html);
+      if (syntaxErr) {
+        return {
+          html: null,
+          seo: null,
+          attempts: MAX_ATTEMPTS,
+          error: (lastError || '') + '\n\nЛучшая попытка синтаксически битая: ' + syntaxErr,
+        };
+      }
       return {
         html: bestOverall.html,
         seo: parseSeo(bestOverall.html, description),
