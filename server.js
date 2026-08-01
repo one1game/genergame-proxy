@@ -644,9 +644,11 @@ async function headlessSmoke(html) {
     browser = await puppeteer.launch({
       executablePath,
       headless: true,
-      // single-process/no-zygote: контейнерные рантаймы (Render) блокируют создание
-      // дочерних процессов — без этого Chromium мгновенно умирает с "Target closed"
-      args: [...(args || []), '--no-sandbox', '--disable-setuid-sandbox', '--mute-audio', '--disable-dev-shm-usage', '--single-process', '--no-zygote', '--headless=new', '--enable-unsafe-swiftshader'],
+      // Контейнер Render (512MB): single-process/no-zygote — без них Chromium мгновенно
+      // умирает с "Target closed". --disable-gpu (без unsafe-swiftshader) — WebGL недоступен,
+      // Phaser сам падает на Canvas-рендерер, а проверка пикселей идёт через 2D — иначе
+      // программный GL съедает память и процесс убивается (ECONNRESET).
+      args: [...(args || []), '--no-sandbox', '--disable-setuid-sandbox', '--mute-audio', '--disable-dev-shm-usage', '--single-process', '--no-zygote', '--headless=new', '--disable-gpu'],
     });
     const page = await browser.newPage();
     const consoleErrors = [];
