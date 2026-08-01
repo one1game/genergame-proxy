@@ -1189,6 +1189,7 @@ async function generateNew(description, textures, baseCode, meta) {
           html: null,
           seo: null,
           attempts: MAX_ATTEMPTS,
+          diagnosticHtml: bestOverall.html,
           error: (lastError || '') + '\n\nЛучшая попытка падает в headless-смоуке:\n- ' + smokeErrs.join('\n- '),
         };
       }
@@ -1350,7 +1351,12 @@ const server = createServer(async (req, res) => {
     if (!result.html) {
       // Телеметрия: фиксируем фейл в БД, чтобы статистика ошибок была реальной (а не только в логах)
       try {
-        await updateGame(job.gameId, { status: 'failed', error_message: String(result.error || 'Generation failed').slice(0, 500) });
+        await updateGame(job.gameId, {
+          status: 'failed',
+          error_message: String(result.error || 'Generation failed').slice(0, 500),
+          // Диагностика: сохраняем лучшую попытку даже при провале — по ней видно строку краша
+          source_code: result.diagnosticHtml || null,
+        });
       } catch (_) { /* не критично для ответа */ }
       res.writeHead(500, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ error: result.error || 'Generation failed' }));
