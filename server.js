@@ -92,6 +92,10 @@ const PLAY_SCENE_PROMPT = `Ты — senior Phaser.js 3.87 разработчик
 - this.sfx — экземпляр класса SFX с готовыми эффектами: this.sfx.jump(), this.sfx.dash(), this.sfx.collect(), this.sfx.hit(), this.sfx.win(), this.sfx.over(), this.sfx.levelup(), this.sfx.combo(), this.sfx.shield(), this.sfx.gameover(), this.sfx.victory(). Плюс низкоуровневый this.sfx.play(freq, dur, type, vol). Вызывай нужный звук на каждое событие.
 - this.registry.set('score', n) / this.registry.get('score') — очки. GameOverScene сама прочитает score и сохранит рекорд.
 - this.scene.start('GameOverScene') — завершение игры (победа/поражение).
+- Готовые эффекты (Juice SDK) — НЕ пиши партиклы/тряску/попапы руками, вызывай: Juice.shake(this, i), Juice.burst(this, x, y, color, n), Juice.popText(this, x, y, text, color), Juice.comboFlash(this, x, y, mult). Это фирменный стиль игры.
+- Музыка: this.music = new Music(); this.music.start() — генеративный саундтрек уже готов; this.music.setTempo(bpm) — ускоряй темп по difficulty_curve (например 96 + level*12). Никогда не создавай второй экземпляр Music.
+- Уровень: генерируй мир через this.rng (this.rng.between(a,b), this.rng.pick(arr), this.rng.frac()) и this.seed — НЕ через Math.random. Покажи this.seed в HUD как '#seed' — у каждого юзера свой воспроизводимый уровень.
+- Существа: makeCreature(this, 'key', seed, [c1,c2,c3]) — процедурный спрайт из примитивов (мягкий блоб, не квадрат) для игрока/врагов; палитру бери из art_style.palette.
 - Текстура из BootScene: 'pixel' (белый квадрат 1x1). Свои текстуры создавай в create(): this.make.graphics()...generateTexture('key', w, h), затем this.add.image(...) с .setTint().
 - Время: this.time.addEvent({delay, callback, loop}) — НЕ setInterval.
 - Физика: this.physics.add.* / this.physics.world.enable(...). Коллизии: this.physics.add.overlap/collider.
@@ -101,12 +105,12 @@ const PLAY_SCENE_PROMPT = `Ты — senior Phaser.js 3.87 разработчик
 ОБЯЗАТЕЛЬНО:
 1. Реализуй win_condition и lose_condition из ТЗ и проверяй их в update()/событиях — иначе юзер застрянет навсегда.
 2. Реализуй difficulty_curve буквально (ускорение/рост числа врагов через this.time.addEvent или счётчик).
-3. Реализуй КАЖДЫЙ juice из ТЗ кодом: тряска this.cameras.main.shake(150,0.01), партиклы this.add.particles(...).explode(), score popup (this.add.text + tween на y/alpha).
+3. Реализуй КАЖДЫЙ juice из ТЗ вызовами Juice SDK: Juice.shake(this) для screen_shake, Juice.burst(this,x,y,color) для particle_burst, Juice.popText(this,x,y,text,color) для score_popup, Juice.comboFlash(this,x,y,mult) для комбо. Не создавай собственные эмиттеры/твины для этих эффектов.
 4. Вызывай this.sfx.play(...) на КАЖДЫЙ sound_cue из ТЗ.
 5. Мобильное управление — Phaser-тексты-кнопки (◀ ▶ ▲ DASH) с .setInteractive(), флаги виртуальных клавиш и разбор в update(), без HTML-оверлеев.
 6. ПРЕМИУМ-ФИШКИ (делай минимум 4):
    - стартовый нарратив: короткая текстовая миссия в начале (this.add.text + tween fade), как в киберпанк-играх;
-   - спец-механика с ресурсом: dash/двойной прыжок/щит, тратящие энергию (0-100), с полоской-индикатором и регенерацией; dash обязательно с тряской камеры (shake) и партиклами;
+   - спец-механика с ресурсом: dash/двойной прыжок/щит, тратящие энергию (0-100), с полоской-индикатором и регенерацией; dash обязательно с Juice.shake(this) и Juice.burst(this,x,y,color);
    - HUD как в дорогих играх: эмодзи-иконки (💎 ❤️ ⏱ 🏆), рекорд из localStorage показывается в HUD и обновляется на лету, счёт/таймер с подложкой (graphics rect с alpha);
    - таймер миссии (обратный отсчёт 3:00) и/или условие победы по прогрессу — покажи его в HUD;
    - шлейф частиц за игроком при рывке/движении (this.add.particles(...).start() при рывке, .stop() после);
@@ -167,6 +171,20 @@ const POLISH_PROMPT = `Игра технически работает. Твоя 
 3. Если HUD выглядит "голым текстом" — добавь фон-подложку (graphics rect с alpha) под счёт/жизни.
 4. Если между сценами нет fade-перехода — добавь this.cameras.main.fadeIn(300) в create() каждой сцены.
 Не меняй геймплейную логику, win/lose условия, структуру классов. Верни ТОЛЬКО полный HTML от <!DOCTYPE html> до </html>. Без пояснений, без markdown-обёртки.`;
+
+// Мультипасс: точечная самокритика лучшего кандидата ДО полной регенерации
+const CRITIQUE_PROMPT = `Ты — строгий самокритик геймплейного кода на Phaser 3.87. Ниже — ТЗ и тело PlayScene-сцены (только методы preload/create/update). Найди 3 САМЫХ СЛАБЫХ места: нереализованные механики из ТЗ, скучная/рваная сложность, отсутствие juice (Juice.shake/Juice.burst/Juice.popText), пропущенные звуки (this.sfx.*), потенциальные баги, дублирование кода. ПЕРЕПИШИ только эти фрагменты точечно. НЕ переписывай весь код и не трогай рабочие места. Сохрани сигнатуры preload()/create()/update(). Верни ТОЛЬКО исправленный код методов, без пояснений, без markdown-обёртки.`;
+
+// Самокритика: дешевле полной регенерации. Мусор на выходе — откат к оригиналу.
+async function selfCritique(body, spec, description) {
+  try {
+    const raw = await callDeepSeek([
+      { role: 'system', content: CRITIQUE_PROMPT },
+      { role: 'user', content: `ТЗ:\n${specBrief(spec, description)}\n\nКод PlayScene:\n${body}` },
+    ], { temperature: 0.3, max_tokens: 8192 });
+    return cleanPlaySceneBody(raw) || body;
+  } catch { return body; }
+}
 
 // Legacy-путь: полная генерация HTML (для улучшения существующих игр по baseCode)
 const LEGACY_SYSTEM_PROMPT = `Ты — элитный Game Developer на Phaser.js 3.87. Твоя задача — создать визуально безупречную, аддиктивную игру в ОДНОМ HTML-файле.
@@ -248,6 +266,72 @@ function loadHS(){try{return parseInt(localStorage.getItem('game_highscore')||'0
 function saveHS(v){try{localStorage.setItem('game_highscore',String(v));}catch(e){}}
 function loadProgress(){try{return JSON.parse(localStorage.getItem('game_progress')||'{}')||{};}catch(e){return {};}}
 function saveProgress(p){try{localStorage.setItem('game_progress',JSON.stringify(p||{}));}catch(e){}}
+// ======= Генеративная музыка: арпеджио-луп, темп растёт со сложностью =======
+class Music {
+  constructor(){ this.ctx=ensureAudio(); this.tempo=96; this.step=0; this.playing=false; this.timer=null; }
+  _note(f, delay, dur){
+    if(!this.ctx) return;
+    try{
+      const t=this.ctx.currentTime+delay;
+      const o=this.ctx.createOscillator(), g=this.ctx.createGain();
+      o.type='triangle'; o.frequency.value=f;
+      g.gain.setValueAtTime(0.0001,t); g.gain.exponentialRampToValueAtTime(0.05,t+0.02);
+      g.gain.exponentialRampToValueAtTime(0.0001,t+dur);
+      o.connect(g); g.connect(this.ctx.destination); o.start(t); o.stop(t+dur+0.05);
+    }catch(e){}
+  }
+  start(){ if(this.playing) return; this.playing=true; this.step=0; this._loop(); }
+  stop(){ this.playing=false; if(this.timer){ clearTimeout(this.timer); this.timer=null; } }
+  setTempo(bpm){ this.tempo=Math.max(60,Math.min(200,bpm)); }
+  _loop(){
+    if(!this.playing) return;
+    const eighth=(60/this.tempo)/2, s=this.step;
+    const arp=[220,277,330,440,554,660,440,330], bass=[110,110,82,98];
+    this._note(arp[s%arp.length], 0, 0.22);
+    this._note(arp[(s+2)%arp.length]*2, eighth, 0.2);
+    this._note(arp[(s+4)%arp.length], eighth*2, 0.18);
+    this._note(bass[Math.floor(s/4)%bass.length], 0, 0.5);
+    this.step++;
+    this.timer=setTimeout(()=>this._loop(), eighth*1000);
+  }
+}
+// ======= Juice SDK: вылизованные эффекты, модель только вызывает =======
+class Juice {
+  static shake(scene, i=0.01){ scene.cameras.main.shake(150,i); }
+  static burst(scene,x,y,color=0xffffff,n=14){
+    const em=scene.add.particles(x,y,'pixel',{speed:{min:80,max:260},angle:{min:0,max:360},scale:{start:0.9,end:0},lifespan:500,gravityY:300,tint:color,emitting:false});
+    em.explode(n); scene.time.delayedCall(700,()=>em.destroy());
+  }
+  static popText(scene,x,y,text,color='#ffffff'){
+    const t=scene.add.text(x,y,text,{fontFamily:'Arial',fontSize:'26px',fontStyle:'bold',color}).setOrigin(0.5).setDepth(999);
+    scene.tweens.add({targets:t,y:y-60,alpha:0,duration:700,ease:'Cubic.easeOut',onComplete:()=>t.destroy()});
+    return t;
+  }
+  static comboFlash(scene,x,y,mult){
+    const t=scene.add.text(x,y,'🔥 x'+mult,{fontFamily:'Arial',fontSize:'34px',fontStyle:'bold',color:'#ff8800'}).setOrigin(0.5).setDepth(999);
+    scene.tweens.add({targets:t,scale:1.5,alpha:0,duration:500,ease:'Back.easeOut',onComplete:()=>t.destroy()});
+    return t;
+  }
+}
+// ======= Фирменный постпроцессинг: bloom + vignette поверх scanlines =======
+function applyPostFX(cam){
+  try{ cam.postFX.addBloom(0xffffff,0.35,1,0.35,1.4); cam.postFX.addVignette(0.25,0.8); }catch(e){}
+}
+// ======= Процедурные существа: блоб из примитивов по seed (не квадраты) =======
+function makeCreature(scene, key, seed, palette){
+  const rng=new Phaser.Math.RandomDataGenerator(String(seed));
+  const g=scene.make.graphics({x:0,y:0}); const s=32, c=palette||[0x22d3ee,0x818cf8,0xffffff];
+  g.fillStyle(c[0],1);
+  g.fillCircle(s/2+rng.between(-4,4), s/2+rng.between(-4,4), rng.between(11,15));
+  g.fillCircle(s/2+rng.between(-9,9), s/2+rng.between(-7,7), rng.between(8,12));
+  g.fillStyle(c[1],1);
+  g.fillCircle(s/2+rng.between(-3,3), s/2-rng.between(8,12), rng.between(4,6));
+  g.fillStyle(c[2],1);
+  g.fillCircle(s/2+rng.between(-5,5), s/2+rng.between(-5,5), rng.between(2,4));
+  g.fillStyle(c[1],1);
+  g.fillRect(s/2-6,s/2+8,4,rng.between(6,10)); g.fillRect(s/2+3,s/2+8,4,rng.between(6,10));
+  g.generateTexture(key,s,s); g.destroy();
+}
 class SFX {
   constructor(){ this.ctx=ensureAudio(); }
   play(freq, dur, type='square', vol=0.15){
@@ -301,6 +385,7 @@ class MenuScene extends Phaser.Scene {
   constructor(){ super('MenuScene'); }
   create(){
     this.cameras.main.fadeIn(300);
+    applyPostFX(this.cameras.main);
     const cx = this.cameras.main.centerX, cy = this.cameras.main.centerY;
     this.add.text(cx, cy-160, '${safeTitle}', {fontFamily:'Arial', fontSize:'48px', color:'#ffffff', fontStyle:'bold'}).setOrigin(0.5);
     const hs = loadHS();
@@ -319,6 +404,7 @@ class GameOverScene extends Phaser.Scene {
   constructor(){ super('GameOverScene'); }
   create(data){
     this.cameras.main.fadeIn(300);
+    applyPostFX(this.cameras.main);
     const score = this.registry.get('score') || 0;
     const prev = loadHS();
     if (score > prev) saveHS(score);
@@ -336,7 +422,18 @@ class GameOverScene extends Phaser.Scene {
   }
 }
 class PlayScene extends Phaser.Scene {
-  constructor(){ super('PlayScene'); this.sfx = new SFX(); }
+  constructor(){
+    super('PlayScene');
+    this.sfx = new SFX();
+    // Seed-based replayability: у каждого юзера свой воспроизводимый уровень
+    const prog = loadProgress();
+    this.seed = prog.seed || (1000 + Math.floor(Math.random()*9000));
+    saveProgress(Object.assign({}, prog, { seed: this.seed }));
+    this.rng = new Phaser.Math.RandomDataGenerator(String(this.seed));
+    this.music = new Music();
+    this.events.on('create', () => applyPostFX(this.cameras.main));
+  }
+  shutdown(){ if (this.music) this.music.stop(); }
 ${playSceneBody}
 }
 new Phaser.Game({
@@ -447,9 +544,9 @@ function checkSpecCoverage(html, spec) {
   });
   (spec.juice || []).forEach(j => {
     const map = {
-      screen_shake: /cameras\.main\.shake/i,
-      particle_burst: /\.explode\(/i,
-      score_popup: /tweens\.add[\s\S]{0,80}(y|alpha)/i,
+      screen_shake: /Juice\.shake\(|cameras\.main\.shake/i,
+      particle_burst: /Juice\.burst\(|\.explode\(/i,
+      score_popup: /Juice\.popText\(|tweens\.add[\s\S]{0,80}(y|alpha)/i,
       camera_follow: /startFollow/i,
       trail_effect: /particles[^)]*\.(start|stop)\(|setEmitZone|\.emitter/i,
       pulse_glow: /postFX\.addGlow|pulse|setGlow/i,
@@ -684,7 +781,7 @@ async function generateNew(description, textures, baseCode) {
       const html = buildGameHtml(body, spec, description);
       const errs = qaHtml(html);
       const specMisses = checkSpecCoverage(html, spec);
-      return { html, errs, specMisses, score: candidateScore({ html, errs, specMisses }) };
+      return { html, body, errs, specMisses, score: candidateScore({ html, errs, specMisses }) };
     }).filter(Boolean);
 
     if (!candidates.length) {
@@ -693,8 +790,20 @@ async function generateNew(description, textures, baseCode) {
     }
 
     candidates.sort((a, b) => b.score - a.score);
-    const top = candidates[0];
+    let top = candidates[0];
     if (!bestOverall || top.score > bestOverall.score) bestOverall = top;
+
+    if (top.errs.length || top.specMisses.length) {
+      // Мультипасс: самокритика точечно чинит слабые места вместо полной регенерации
+      const critiqued = await selfCritique(top.body, spec, description);
+      if (critiqued !== top.body) {
+        const html2 = buildGameHtml(critiqued, spec, description);
+        const errs2 = qaHtml(html2);
+        const specMisses2 = checkSpecCoverage(html2, spec);
+        const c2 = { html: html2, body: critiqued, errs: errs2, specMisses: specMisses2, score: candidateScore({ html: html2, errs: errs2, specMisses: specMisses2 }) };
+        if (c2.score > top.score) top = c2;
+      }
+    }
 
     if (top.errs.length === 0 && top.specMisses.length === 0) {
       // Статика чистая — гоняем headless-смоук перед приёмкой
