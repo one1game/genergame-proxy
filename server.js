@@ -477,10 +477,13 @@ async function callDeepSeek(messages, opts = {}) {
   return content;
 }
 
-async function generatePlayScene(description, spec, textures, lastError) {
+async function generatePlayScene(description, spec, textures, lastError, baseRef) {
   let user = specBrief(spec, description);
   if (textures?.length) {
     user += `\n\nРеференсные текстуры (можешь использовать как идеи для палитры):\n${textures.map(t => `- ${t.name}: ${t.url}`).join('\n')}`;
+  }
+  if (baseRef) {
+    user += `\n\nСУЩЕСТВУЮЩАЯ ИГРА (ты её улучшаешь): сохрани жанр, тему и ключевые фишки из неё, НО построй игру ЗАНОВО в полном скелетоне (Boot/Menu/Play/GameOver), не копируй её структуру. Код как референс:\n${baseRef}`;
   }
   if (lastError) user += `\n\nПРЕДЫДУЩАЯ ПОПЫТКА НЕ ПРОШЛА QA. ИСПРАВЬ:\n${lastError}`;
   return callDeepSeek([
@@ -524,19 +527,23 @@ async function polishPass(html, description) {
 // ============================================================
 // Конвейер генерации
 // ============================================================
-async function generateNew(description, textures) {
+async function generateNew(description, textures, baseCode) {
   let spec = null;
-  try { spec = await generateSpec(description); }
-  catch { spec = null; } // SPEC не удался — генерим по сырому описанию
+  try {
+    spec = await generateSpec(description + (baseCode
+      ? '\n(Это УЛУЧШЕНИЕ существующей игры — сохрани жанр и ключевые фишки, но перестрой игру заново, лучше и полнее.)'
+      : ''));
+  } catch { spec = null; } // SPEC не удался — генерим по сырому описанию
 
+  const baseRef = baseCode && baseCode.length > 5000 ? baseCode.slice(0, 14000) : (baseCode || undefined);
   let lastError = '';
   let best = null;
 
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
     // Best-of-2: два параллельных тела PlayScene, берём то, что прошло больше проверок
     const [bodyA, bodyB] = await Promise.all([
-      generatePlayScene(description, spec, textures, lastError).catch(() => null),
-      generatePlayScene(description, spec, textures, lastError).catch(() => null),
+      generatePlayScene(description, spec, textures, lastError, baseRef).catch(() => null),
+      generatePlayScene(description, spec, textures, lastError, baseRef).catch(() => null),
     ]);
 
     const candidates = [bodyA, bodyB].map((rawBody) => {
@@ -562,7 +569,7 @@ async function generateNew(description, textures) {
 
   if (!best) {
     // Полный провал — отдаём последний сырой результат с пометкой
-    const rawBody = await generatePlayScene(description, spec, textures, '').catch(() => null);
+    const rawBody = await generatePlayScene(description, spec, textures, '', baseRef).catch(() => null);
     const body = rawBody ? cleanPlaySceneBody(rawBody) : null;
     const html = body ? buildGameHtml(body, spec, description) : null;
     return {
@@ -611,8 +618,8 @@ async function generateLegacy(description, textures, baseCode) {
 }
 
 async function generate(description, textures, baseCode) {
-  if (baseCode) return generateLegacy(description, textures, baseCode);
-  return generateNew(description, textures);
+  // Улучшения существующих игр тоже идём через скелетон: baseCode — только референс стиля/фишек
+  return generateNew(description, textures, baseCode);
 }
 
 // --- Supabase (lazy init) ---
