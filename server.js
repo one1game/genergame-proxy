@@ -634,7 +634,7 @@ function getPuppeteer() {
 
 async function headlessSmoke(html) {
   const pp = await getPuppeteer();
-  if (!pp) return null; // Chromium недоступен — смоук пропускаем
+  if (!pp) return 'SKIPPED'; // Chromium недоступен — смоук пропускаем (видно в ответе генерации)
   const { puppeteer, executablePath, args } = pp;
   let browser = null;
   try {
@@ -819,6 +819,7 @@ async function generateNew(description, textures, baseCode, meta) {
   let lastError = '';
   let best = null;
   let bestOverall = null; // лучший по скорингу за ВСЕ попытки — фейл-бэк
+  let smokeStatus = null; // 'ok' | 'fail' | 'skipped' — результат headless-смоука
 
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
     // Best-of-3: три параллельных тела PlayScene, ранжируем по скорингу покрытия
@@ -862,7 +863,8 @@ async function generateNew(description, textures, baseCode, meta) {
     if (top.errs.length === 0 && top.specMisses.length === 0) {
       // Статика чистая — гоняем headless-смоук перед приёмкой
       const smokeErrs = await headlessSmoke(top.html);
-      if (smokeErrs && smokeErrs.length) {
+      smokeStatus = smokeErrs === 'SKIPPED' ? 'skipped' : (smokeErrs ? 'fail' : 'ok');
+      if (smokeErrs && smokeErrs !== 'SKIPPED' && smokeErrs.length) {
         lastError = 'ПРЕДЫДУЩАЯ ПОПЫТКА (headless-смоук поймал runtime-баг):\n- ' + smokeErrs.join('\n- ');
         continue;
       }
@@ -1004,7 +1006,7 @@ const server = createServer(async (req, res) => {
           }
           console.log(`✅ ${job.gameId} improved (${job.action}) in ${Date.now() - startTime}ms`);
           res.writeHead(200, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ ok: true, seo }));
+          res.end(JSON.stringify({ ok: true, seo, smoke: result.smoke }));
           return;
         }
       }
@@ -1042,7 +1044,7 @@ const server = createServer(async (req, res) => {
     console.log(`✅ ${job.gameId} done in ${Date.now() - startTime}ms`);
 
     res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ ok: true, seo }));
+    res.end(JSON.stringify({ ok: true, seo, smoke: result.smoke }));
   } catch (err) {
     console.error(`❌ job error: ${err.message}`);
     res.writeHead(500, { 'Content-Type': 'application/json' });
