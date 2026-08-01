@@ -77,7 +77,7 @@ function specBrief(spec, description) {
     `- Сложность: ${spec.difficulty_curve}`,
     `- Мета-прогрессия: уровни: ${spec.progression?.levels || '-'}; апгрейды магазина: ${(spec.progression?.upgrades || []).join(', ') || '-'}; экономика: ${spec.progression?.economy || '-'}`,
     `- Juice (реализуй каждый): ${(spec.juice || []).join(', ')}`,
-    `- Звуки (на каждый cue вызови соответствующий метод this.sfx.<cue>()): ${(spec.sound_cues || []).join(', ')}`,
+    `- Звуки (вызови this.sfx.<cue>() минимум на половину cues — только те, что реально есть в механиках; мёртвые вызовы запрещены): ${(spec.sound_cues || []).join(', ')}`,
     `- Палитра: ${JSON.stringify(spec.art_style?.palette || [])}, настроение: ${spec.art_style?.mood || ''}, вдохновение: ${(spec.art_style?.inspiration || []).join(', ') || '-'}`,
     `- Лимиты производительности: частицы ≤ ${spec.performance?.max_particles || 50}, враги ≤ ${spec.performance?.max_enemies || 15}`,
   ].join('\n');
@@ -106,7 +106,7 @@ const PLAY_SCENE_PROMPT = `Ты — senior Phaser.js 3.87 разработчик
 1. Реализуй win_condition и lose_condition из ТЗ и проверяй их в update()/событиях — иначе юзер застрянет навсегда.
 2. Реализуй difficulty_curve буквально (ускорение/рост числа врагов через this.time.addEvent или счётчик).
 3. Реализуй КАЖДЫЙ juice из ТЗ вызовами Juice SDK: Juice.shake(this) для screen_shake, Juice.burst(this,x,y,color) для particle_burst, Juice.popText(this,x,y,text,color) для score_popup, Juice.comboFlash(this,x,y,mult) для комбо. Не создавай собственные эмиттеры/твины для этих эффектов.
-4. Вызывай this.sfx.play(...) на КАЖДЫЙ sound_cue из ТЗ.
+4. Вызывай this.sfx.play(...) на КАЖДЫЙ sound_cue из ТЗ, который соответствует реализованной механике (минимум половина; мёртвые вызовы несуществующих механик запрещены).
 5. Мобильное управление — Phaser-тексты-кнопки (◀ ▶ ▲ DASH) с .setInteractive(), флаги виртуальных клавиш и разбор в update(), без HTML-оверлеев.
 6. ПРЕМИУМ-ФИШКИ (делай минимум 4):
    - стартовый нарратив: короткая текстовая миссия в начале (this.add.text + tween fade), как в киберпанк-играх;
@@ -552,10 +552,12 @@ function legacyStructuralErrors(html) {
 function checkSpecCoverage(html, spec) {
   const errs = [];
   if (!spec) return errs;
-  (spec.sound_cues || []).forEach(cue => {
-    if (!new RegExp(`sfx\\.${cue}\\(`, 'i').test(html))
-      errs.push(`sound_cue "${cue}" из ТЗ не вызван`);
-  });
+  // Звуки: требуем БОЛЬШИНСТВО заявленных cues (а не все) — cue вида combo/shield/levelup
+  // легитимно отсутствует, если в игре нет этой механики (мёртвый вызов = брак по тем же правилам)
+  const cues = spec.sound_cues || [];
+  const missing = cues.filter(cue => !new RegExp(`sfx\\.${cue}\\(`, 'i').test(html));
+  if (cues.length > 0 && missing.length > cues.length / 2)
+    errs.push(`звуки: из ${cues.length} cues ТЗ вызвано меньше половины (не найдены: ${missing.join(', ')})`);
   (spec.juice || []).forEach(j => {
     const map = {
       screen_shake: /Juice\.shake\(|cameras\.main\.shake/i,
