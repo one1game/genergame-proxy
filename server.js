@@ -97,6 +97,7 @@ const PLAY_SCENE_PROMPT = `Ты — senior Phaser.js 3.87 разработчик
 - Уровень: генерируй мир через this.rng (this.rng.between(a,b), this.rng.pick(arr), this.rng.frac()) и this.seed — НЕ через Math.random. Покажи this.seed в HUD как '#seed' — у каждого юзера свой воспроизводимый уровень.
 - Существа: makeCreature(this, 'key', seed, [c1,c2,c3]) — создаёт процедурный спрайт из примитивов (мягкий блоб, не квадрат) для игрока/врагов; палитру бери из art_style.palette. ВАЖНО: makeCreature() возвращает готовый Arcade-спрайт (this.physics.add.sprite) на позиции (0,0) — присваивай результат (const s = makeCreature(...)) и сразу ставь позицию (s.setPosition(x,y)); при желании добавь в физику (this.physics.add.existing(s), body.setCollideWorldBounds и т.п. — он уже Arcade-спрайт).
 - Цвета — ТОЛЬКО числа вида 0xRRGGBB (например 0x4a90d9), НИКОГДА строки '#RRGGBB' — setTint/fillStyle/particle tint в Phaser ждут число, строки дают чёрный/непредсказуемый цвет.
+- НИКОГДА не читай Juice, Music, SFX или сцены (BootScene/MenuScene/PlayScene/GameOverScene) через window.ИмяКласса — в classic-script top-level class/const/let НЕ становятся свойствами window (window.Juice === undefined). Используй класс напрямую по имени: Juice.shake(this, ...), new SFX(), new Music().
 - Текстура из BootScene: 'pixel' (белый квадрат 1x1). Свои текстуры создавай в create(): this.make.graphics()...generateTexture('key', w, h), затем this.add.image(...) с .setTint().
 - Время: this.time.addEvent({delay, callback, loop}) — НЕ setInterval.
 - Физика: this.physics.add.* / this.physics.world.enable(...). Коллизии: this.physics.add.overlap/collider — регистрируются ОДИН раз в create() (это привязка постоянного слушателя, а не разовая проверка); НИКОГДА не вызывай их в update() или в helper-методах, вызываемых из update() (checkCollisions и т.п.) — каждый вызов плодит нового слушателя (60 дублей/сек), игра трясётся и тормозит.
@@ -161,7 +162,7 @@ const REVIEW_PROMPT = `Ты — QA-инженер по Phaser.js 3.87. Ниже 
 3. Загрузка текстур: если загружается несуществующая текстура — замени на программную генерацию (this.make.graphics() + generateTexture).
 4. Геймплей-цикл: победа/поражение реально достижимы, рестарт работает, игра не застревает.
 5. Мобильное управление: работает на тач-экране.
-6. Производительность: объекты не плодятся вечно в update(). physics.add.overlap/collider — ТОЛЬКО один раз в create(), не в update() и не в helper-методах, вызываемых из update() (каждый вызов = новый слушатель, 60 дублей/сек). startFollow(объект) — только ПОСЛЕ создания объекта и без дублей.
+6. Производительность: объекты не плодятся вечно в update(). physics.add.overlap/collider — ТОЛЬКО один раз в create(), не в update() и не в helper-методах, вызываемых из update() (каждый вызов = новый слушатель, 60 дублей/сек). startFollow(объект) — только ПОСЛЕ создания объекта и без дублей. Никогда не читай классы (Juice/Music/SFX/сцены) через window.ИмяКласса — top-level class в classic script не попадает в window (window.Juice === undefined), обращайся напрямую по имени.
 
 Сохрани название, теги <title>, meta description и СТРУКТУРУ КЛАССОВ (BootScene/MenuScene/PlayScene/GameOverScene + new Phaser.Game config) БЕЗ изменений. Не переписывай стиль игры — только чини баги.
 Верни ТОЛЬКО исправленный ПОЛНЫЙ HTML-код (от <!DOCTYPE html> до </html>). Без пояснений, без markdown-обёртки.`;
@@ -179,6 +180,7 @@ const CRITIQUE_PROMPT = `Ты — строгий самокритик геймп
 Новые правила (исполняй буквально):
 - this.cameras.main.startFollow(объект) — строго ПОСЛЕ создания объекта (this.player = ...) и БЕЗ дублей: если правильный вызов уже есть после присваивания, УДАЛИ более ранний сломанный (первый роняет create() с TypeError: Cannot read properties of undefined).
 - physics.add.overlap/collider регистрируются ТОЛЬКО в create() и ТОЛЬКО один раз. В update() и в helper-методах, вызываемых из update() (checkCollisions и т.п.), их быть не должно — каждый вызов = новый постоянный слушатель, 60 дублей в секунду, игра трясётся и тормозит. Перенеси регистрацию в create().
+- НИКОГДА не обращайся к Juice, Music, SFX и сценам через window.ИмяКласса — top-level class/const/let не попадают в window (window.Juice === undefined). Только напрямую по имени: Juice.shake(this, ...), new SFX(), new Music().
 
 ОБЯЗАТЕЛЬНО при правках: проверь каждый вызов .on(, .emit(, .destroy(), .setTexture() — объект ПЕРЕД вызовом не должен быть undefined (особенно this.events, this.input, this.music, this.sfx, кастомные объекты сцены, результаты this.scene.get(...) и this.physics.add.*). Если объект может не существовать к моменту вызова — добавь проверку (if (this.xxx)) или перенеси вызов в create() до его использования. Симптом этого бага: "Cannot read properties of undefined (reading 'on')".
 Также проверь ПОРЯДОК ВЫЗОВОВ в create(): любой метод, который получает this.player/this.enemy/другой игровой объект АРГУМЕНТОМ (this.cameras.main.startFollow(this.player,...), this.physics.add.collider(...), this.physics.add.overlap(...)), должен вызываться ПОСЛЕ строки, где этот объект создаётся (this.player = this.physics.add.sprite(...) и т.п.), а не до неё. Симптом: "Cannot read properties of undefined (reading 'x')" — сцена обрывается на этой строке, остальной create() не выполняется.
@@ -646,6 +648,17 @@ function detectColorStrings(body) {
   return errs;
 }
 
+// Детектор доступа к классам через window: в classic-script top-level class/const/let
+// НЕ попадают в window (в отличие от function/var). window.Juice/window.Music/window.SFX/
+// window.*Scene ВСЕГДА undefined — this.Juice = window.Juice даёт undefined, и первый же
+// this.Juice.shake() роняет игру. Это не эвристика, а жёсткий факт про scoping.
+function detectWindowClassAccess(body) {
+  if (!body) return [];
+  const m = body.match(/window\.(Juice|Music|SFX|BootScene|MenuScene|PlayScene|GameOverScene)\b/g);
+  if (!m) return [];
+  return [...new Set(m)].map(x => `${x} — классы скелетона не попадают в window (top-level class в classic script), обращайся напрямую по имени (Juice.shake(...)), не через window.`);
+}
+
 function detectUndefinedMethods(body) {
   if (!body) return [];
   const methods = new Set(['constructor']);
@@ -839,6 +852,18 @@ async function headlessSmoke(html) {
       await page.mouse.click(100 + Math.floor(Math.random() * 760), 100 + Math.floor(Math.random() * 340)).catch(() => {});
       await new Promise(r => setTimeout(r, 400));
     }
+    // Клавиатура: без неё игры со стрелками стоят на месте, игрок не долетает до
+    // астероидов/звёзд, и весь код коллизий (hitAsteroid/collectStar, где живут краши
+    // вроде this.Juice.shake) за время смоука не выполняется. Зажимаем случайное
+    // направление на 1.5с — игрок реально движется и сталкивается.
+    const arrow = ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'][Math.floor(Math.random() * 4)];
+    try {
+      await page.keyboard.down(arrow);
+      await new Promise(r => setTimeout(r, 1500));
+    } catch (e) {}
+    for (const k of ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown']) {
+      await page.keyboard.up(k).catch(() => {});
+    }
     await new Promise(r => setTimeout(r, 1500));
     const canvas = await page.evaluate(() => {
       const c = document.querySelector('canvas');
@@ -968,7 +993,7 @@ async function reviewAndFix(html, description) {
       { role: 'user', content: `Игра по запросу: ${description}\n\nHTML-код игры:\n${html}` },
     ], { temperature: 0.3, max_tokens: 8192 });
     const fixed = ensureCdn(cleanHtml(raw));
-    const errs = qaHtml(fixed).concat(detectFixedApiCalls(fixed), detectColorStrings(fixed), detectEarlyCameraFollow(fixed), detectCollidersInUpdate(fixed));
+    const errs = qaHtml(fixed).concat(detectFixedApiCalls(fixed), detectColorStrings(fixed), detectEarlyCameraFollow(fixed), detectCollidersInUpdate(fixed), detectWindowClassAccess(fixed));
     if (errs.length) return null;
     return fixed;
   } catch {
@@ -984,7 +1009,7 @@ async function polishPass(html, description) {
       { role: 'user', content: `Игра по запросу: ${description}\n\nHTML-код игры:\n${html}` },
     ], { temperature: 0.3, max_tokens: 8192 });
     const polished = ensureCdn(cleanHtml(raw));
-    const errs = qaHtml(polished).concat(detectFixedApiCalls(polished), detectColorStrings(polished), detectEarlyCameraFollow(polished), detectCollidersInUpdate(polished));
+    const errs = qaHtml(polished).concat(detectFixedApiCalls(polished), detectColorStrings(polished), detectEarlyCameraFollow(polished), detectCollidersInUpdate(polished), detectWindowClassAccess(polished));
     if (errs.length) return null; // полировка что-то сломала — откатываем
     return polished;
   } catch {
@@ -1025,8 +1050,11 @@ async function generateNew(description, textures, baseCode, meta) {
         .map(n => `Метод this.${n}() вызывается, но не определён в классе PlayScene — добавь его реализацию (или удали вызов)`);
       const fixedApiErrs = detectFixedApiCalls(body);
       const colorErrs = detectColorStrings(body);
+      const earlyFollowErrs = detectEarlyCameraFollow(body);
+      const colliderErrs = detectCollidersInUpdate(body);
+      const windowClassErrs = detectWindowClassAccess(body);
       const specMisses = checkSpecCoverage(html, spec);
-      const allErrs = [...errs, ...unknownMethods, ...fixedApiErrs, ...colorErrs];
+      const allErrs = [...errs, ...unknownMethods, ...fixedApiErrs, ...colorErrs, ...earlyFollowErrs, ...colliderErrs, ...windowClassErrs];
       return { html, body, errs: allErrs, specMisses, score: candidateScore({ html, errs: allErrs, specMisses }) };
     }).filter(Boolean);
 
