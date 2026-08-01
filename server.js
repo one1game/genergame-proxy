@@ -900,7 +900,12 @@ async function headlessSmoke(html) {
         if (!/Failed to load resource|net::ERR_/.test(t)) consoleErrors.push(t.slice(0, 200));
       }
     });
-    page.on('pageerror', e => consoleErrors.push(String((e && e.message) || e).slice(0, 200)));
+    page.on('pageerror', e => {
+      const msg = String((e && e.message) || e).slice(0, 160);
+      // Стек даёт номер строки в сгенерированном HTML — модель сможет точечно починить
+      const stackLine = (e && e.stack && e.stack.split('\n').find(l => /\.html:\d+/.test(l)) || '').trim();
+      consoleErrors.push((msg + (stackLine ? ' [' + stackLine.slice(0, 90) + ']' : '')).slice(0, 260));
+    });
     // preserveDrawingBuffer — чтобы readPixels работал вне кадра
     await page.evaluateOnNewDocument(() => {
       const orig = HTMLCanvasElement.prototype.getContext;
