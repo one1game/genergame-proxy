@@ -946,6 +946,21 @@ async function generateNew(description, textures, baseCode, meta) {
   const polished = await polishPass(base, description);
   const final = polished || base;
 
+  // НОВОЕ: review/polish переписывают код ПОСЛЕ смоука на строке 900 без повторной
+  // браузерной проверки — финальный код мог сломаться (порядок инициализации, типы).
+  // Перепроверяем смоуком; при провале откатываемся на best (он уже прошёл смоук).
+  const finalSmoke = await headlessSmoke(final);
+  if (finalSmoke && finalSmoke !== 'SKIPPED' && finalSmoke.length) {
+    return {
+      html: best,
+      seo: parseSeo(best, description),
+      attempts: MAX_ATTEMPTS,
+      reviewed: false,
+      smokeFallback: true,
+      error: 'review/polish сломали рабочую игру, откат на версию до review:\n- ' + finalSmoke.join('\n- '),
+    };
+  }
+
   return { html: final, seo: parseSeo(final, description), attempts: MAX_ATTEMPTS, reviewed: !!reviewed };
 }
 
