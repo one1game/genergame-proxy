@@ -176,11 +176,11 @@ const POLISH_PROMPT = `Игра технически работает. Твоя 
 const CRITIQUE_PROMPT = `Ты — строгий самокритик геймплейного кода на Phaser 3.87. Ниже — ТЗ и тело PlayScene-сцены (только методы preload/create/update). Найди 3 САМЫХ СЛАБЫХ места: нереализованные механики из ТЗ, скучная/рваная сложность, отсутствие juice (Juice.shake/Juice.burst/Juice.popText), пропущенные звуки (this.sfx.*), потенциальные баги, дублирование кода. ПЕРЕПИШИ только эти фрагменты точечно. НЕ переписывай весь код и не трогай рабочие места. Сохрани сигнатуры preload()/create()/update(). Верни ТОЛЬКО исправленный код методов, без пояснений, без markdown-обёртки.`;
 
 // Самокритика: дешевле полной регенерации. Мусор на выходе — откат к оригиналу.
-async function selfCritique(body, spec, description) {
+async function selfCritique(body, spec, description, issues) {
   try {
     const raw = await callDeepSeek([
       { role: 'system', content: CRITIQUE_PROMPT },
-      { role: 'user', content: `ТЗ:\n${specBrief(spec, description)}\n\nКод PlayScene:\n${body}` },
+      { role: 'user', content: `ТЗ:\n${specBrief(spec, description)}\n${issues && issues.length ? '\nОШИБКИ QA (исправь каждую):\n- ' + issues.join('\n- ') + '\n' : ''}\nКод PlayScene:\n${body}` },
     ], { temperature: 0.3, max_tokens: 8192 });
     return cleanPlaySceneBody(raw) || body;
   } catch { return body; }
@@ -584,6 +584,29 @@ function candidateScore(c) {
   return -c.errs.length * 10 - c.specMisses.length * 3 + (c.html.length / 1000);
 }
 
+// Детектор неопределённых методов: модель вызвала this.foo(), но foo не объявлен
+// в классе и не является объектом Phaser. Ловит ReferenceError-краши на этапе QA,
+// до того как игра попадёт к юзеру.
+function detectUndefinedMethods(body) {
+  if (!body) return [];
+  const methods = new Set(['constructor']);
+  for (const m of body.matchAll(/^\s+([A-Za-z_$][\w$]*)\s*\([^)]*\)\s*\{/gm)) methods.add(m[1]);
+  // Сущности, присвоенные из фабрик Phaser (спрайты/группы/тексты) — их методы валидны
+  const entities = new Set();
+  for (const m of body.matchAll(/this\.([A-Za-z_$][\w$]*)\s*=\s*this\.(?:add|physics|make|scene|time|data|cache)\./g)) entities.add(m[1]);
+  const groups = new Set([
+    'add', 'physics', 'time', 'scene', 'registry', 'input', 'cameras', 'tweens',
+    'sfx', 'rng', 'music', 'load', 'make', 'sys', 'events', 'anims', 'scale',
+    'children', 'sound', 'cache', 'textures', 'data', 'game', 'renderer', 'canvas',
+  ]);
+  const unknown = new Set();
+  for (const m of body.matchAll(/this\.([A-Za-z_$][\w$]*)\s*\(/g)) {
+    const name = m[1];
+    if (!methods.has(name) && !entities.has(name) && !groups.has(name)) unknown.add(name);
+  }
+  return [...unknown];
+}
+
 // ============================================================
 // Headless-смоук (puppeteer): ловим runtime-баги, которые vm.Script не видит
 // Открывает HTML, 5 сек автоигры (рандомные тапы), снимает console.error,
@@ -794,8 +817,10 @@ async function generateNew(description, textures, baseCode, meta) {
       if (!body) return null;
       const html = buildGameHtml(body, spec, description, meta);
       const errs = qaHtml(html);
+      const unknownMethods = detectUndefinedMethods(body)
+        .map(n => `Метод this.${n}() вызывается, но не определён в классе PlayScene — добавь его реализацию (или удали вызов)`);
       const specMisses = checkSpecCoverage(html, spec);
-      return { html, body, errs, specMisses, score: candidateScore({ html, errs, specMisses }) };
+      return { html, body, errs: [...errs, ...unknownMethods], specMisses, score: candidateScore({ html, errs: [...errs, ...unknownMethods], specMisses }) };
     }).filter(Boolean);
 
     if (!candidates.length) {
@@ -809,7 +834,7 @@ async function generateNew(description, textures, baseCode, meta) {
 
     if (top.errs.length || top.specMisses.length) {
       // Мультипасс: самокритика точечно чинит слабые места вместо полной регенерации
-      const critiqued = await selfCritique(top.body, spec, description);
+      const critiqued = await selfCritique(top.body, spec, description, [...top.errs, ...top.specMisses]);
       if (critiqued !== top.body) {
         const html2 = buildGameHtml(critiqued, spec, description, meta);
         const errs2 = qaHtml(html2);
