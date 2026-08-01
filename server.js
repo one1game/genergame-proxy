@@ -95,12 +95,13 @@ const PLAY_SCENE_PROMPT = `Ты — senior Phaser.js 3.87 разработчик
 - Готовые эффекты (Juice SDK) — НЕ пиши партиклы/тряску/попапы руками, вызывай: Juice.shake(this, intensity), Juice.burst(this, x, y, color, n), Juice.popText(this, x, y, text, color), Juice.comboFlash(this, x, y, mult). Это фирменный стиль игры. ВАЖНО: Juice.shake(this, intensity) — intensity в диапазоне 0.005–0.05 (доля экрана), НЕ пиксели: сильный удар 0.04–0.05, обычный 0.015–0.025, лёгкий 0.005–0.01. Никогда не передавай 5–20.
 - Музыка: this.music = new Music(); this.music.start() — генеративный саундтрек уже готов; this.music.setTempo(bpm) — ускоряй темп по difficulty_curve (например 96 + level*12). Никогда не создавай второй экземпляр Music.
 - Уровень: генерируй мир через this.rng (this.rng.between(a,b), this.rng.pick(arr), this.rng.frac()) и this.seed — НЕ через Math.random. Покажи this.seed в HUD как '#seed' — у каждого юзера свой воспроизводимый уровень.
-- Существа: makeCreature(this, 'key', seed, [c1,c2,c3]) — создаёт процедурный спрайт из примитивов (мягкий блоб, не квадрат) для игрока/врагов; палитру бери из art_style.palette. ВАЖНО: makeCreature() возвращает готовый Arcade-спрайт (this.physics.add.sprite) на позиции (0,0) — присваивай результат (const s = makeCreature(...)) и сразу ставь позицию (s.setPosition(x,y)); при желании добавь в физику (this.physics.add.existing(s), body.setCollideWorldBounds и т.п. — он уже Arcade-спрайт).
+- Существа: makeCreature(this, 'key', seed, [c1,c2,c3]) — создаёт процедурный спрайт из примитивов (мягкий блоб, не квадрат) для игрока/врагов; палитру бери из art_style.palette. ВАЖНО: makeCreature() возвращает ГОТОВЫЙ Arcade-спрайт (this.physics.add.sprite) с телом физики — присваивай результат (const s = makeCreature(...)), ставь позицию (s.setPosition(x,y)) и настраивай тело (s.body.setCollideWorldBounds(true) и т.п.). НИКОГДА не зови this.physics.add.existing(s) на объекты из makeCreature — повторная регистрация пересоздаёт body (неопределённое поведение). physics.add.existing — только для объектов БЕЗ физики (this.add.rectangle, this.add.image и т.п.).
 - Цвета — ТОЛЬКО числа вида 0xRRGGBB (например 0x4a90d9), НИКОГДА строки '#RRGGBB' — setTint/fillStyle/particle tint в Phaser ждут число, строки дают чёрный/непредсказуемый цвет.
 - НИКОГДА не читай Juice, Music, SFX или сцены (BootScene/MenuScene/PlayScene/GameOverScene) через window.ИмяКласса — в classic-script top-level class/const/let НЕ становятся свойствами window (window.Juice === undefined). Используй класс напрямую по имени: Juice.shake(this, ...), new SFX(), new Music().
 - Текстура из BootScene: 'pixel' (белый квадрат 1x1). Свои текстуры создавай в create(): this.make.graphics()...generateTexture('key', w, h), затем this.add.image(...) с .setTint().
 - Время: this.time.addEvent({delay, callback, loop}) — НЕ setInterval.
 - Физика: this.physics.add.* / this.physics.world.enable(...). Коллизии: this.physics.add.overlap/collider — регистрируются ОДИН раз в create() (это привязка постоянного слушателя, а не разовая проверка); НИКОГДА не вызывай их в update() или в helper-методах, вызываемых из update() (checkCollisions и т.п.) — каждый вызов плодит нового слушателя (60 дублей/сек), игра трясётся и тормозит.
+- ОДНОРАЗОВЫЕ СОБЫТИЯ ИЗ UPDATE(): любой переход сцены (this.scene.start/restart), победа/поражение (victory()/gameOver()) или другое одноразовое действие, которое проверяется в методе, вызываемом из update() (checkRoundConditions и т.п.), ОБЯЗАН быть защищён булевой защёлкой: в начале проверки 'if (this.transitioning) return;', при срабатывании — 'this.transitioning = true;' ДО вызова. Иначе условие (например currentLevel > MAX_LEVELS) остаётся истинным несколько кадров до фактического переключения сцены, и событие срабатывает повторно (двойной звук, дубль Juice, многократный scene.start).
 
 ЗАПРЕЩЕНО (брак): setZIndex, setAnchor, setOpacity, this.add.tween, setInterval, this.sound.add. Для скруглений/цвета — make.graphics + setTint. Для анимаций — this.tweens.add. Для звука — this.sfx.play. (Примечание: setColor() легален для текста Phaser.Text, но для спрайтов его нет.)
 ЗАПРЕЩЕНО ОБЪЯВЛЯТЬ: class Music, class Juice, class SFX — эти классы уже определены в каркасе ГЛОБАЛЬНО. Используй this.music / this.sfx / Juice.* как есть, не дублируй их объявления (иначе SyntaxError: Identifier already declared).
@@ -163,6 +164,11 @@ const REVIEW_PROMPT = `Ты — QA-инженер по Phaser.js 3.87. Ниже 
 4. Геймплей-цикл: победа/поражение реально достижимы, рестарт работает, игра не застревает.
 5. Мобильное управление: работает на тач-экране.
 6. Производительность: объекты не плодятся вечно в update(). physics.add.overlap/collider — ТОЛЬКО один раз в create(), не в update() и не в helper-методах, вызываемых из update() (каждый вызов = новый слушатель, 60 дублей/сек). startFollow(объект) — только ПОСЛЕ создания объекта и без дублей. Никогда не читай классы (Juice/Music/SFX/сцены) через window.ИмяКласса — top-level class в classic script не попадает в window (window.Juice === undefined), обращайся напрямую по имени.
+7. НЕ зови this.physics.add.existing(X) на объекты, созданные через makeCreature() — она уже возвращает this.physics.add.sprite с телом физики; повторный вызов пересоздаёт body. physics.add.existing — только для объектов без физики (this.add.rectangle/image и т.п.).
+8. Одноразовые события/переходы сцен, проверяемые в update() или в helper-методах из update() (victory()/gameOver()/levelComplete() и т.п.), защищай булевой защёлкой: 'if (this.transitioning) return;' в начале, 'this.transitioning = true;' ДО срабатывания. Без защёлки условие (currentLevel > MAX_LEVELS и т.п.) истинно несколько кадров до переключения сцены → событие дублируется (двойной звук/двойной juice/многократный scene.start).
+9. Здоровье/бары: не читай entity.hp/sprite.hp (у спрайтов нет такого свойства — это NaN, в fillRect он ФАТАЛЬНО крашит Canvas: TypeError: non-finite, create() не доходит до конца). Ширина полосы при создании — константа 100%. Здоровье храни в this.playerHP/this.enemyHP.
+10. Seed: this.rng/this.seed — ОДИН раз в constructor(); не перезаписывай в create() (seed-based replayability ломается, прогресс игнорируется).
+11. Счёт: обязательно this.registry.set('score', n) при изменении счёта и перед scene.start('GameOverScene') — GameOverScene читает только registry.get('score'), без set счёт всегда 0.
 
 Сохрани название, теги <title>, meta description и СТРУКТУРУ КЛАССОВ (BootScene/MenuScene/PlayScene/GameOverScene + new Phaser.Game config) БЕЗ изменений. Не переписывай стиль игры — только чини баги.
 Верни ТОЛЬКО исправленный ПОЛНЫЙ HTML-код (от <!DOCTYPE html> до </html>). Без пояснений, без markdown-обёртки.`;
@@ -181,6 +187,11 @@ const CRITIQUE_PROMPT = `Ты — строгий самокритик геймп
 - this.cameras.main.startFollow(объект) — строго ПОСЛЕ создания объекта (this.player = ...) и БЕЗ дублей: если правильный вызов уже есть после присваивания, УДАЛИ более ранний сломанный (первый роняет create() с TypeError: Cannot read properties of undefined).
 - physics.add.overlap/collider регистрируются ТОЛЬКО в create() и ТОЛЬКО один раз. В update() и в helper-методах, вызываемых из update() (checkCollisions и т.п.), их быть не должно — каждый вызов = новый постоянный слушатель, 60 дублей в секунду, игра трясётся и тормозит. Перенеси регистрацию в create().
 - НИКОГДА не обращайся к Juice, Music, SFX и сценам через window.ИмяКласса — top-level class/const/let не попадают в window (window.Juice === undefined). Только напрямую по имени: Juice.shake(this, ...), new SFX(), new Music().
+- НЕ зови this.physics.add.existing(X) на объекты, созданные через makeCreature() — она уже возвращает this.physics.add.sprite с телом; повторный вызов пересоздаёт body. physics.add.existing — только для this.add.rectangle/image и прочих объектов без физики.
+- Полоски HP/бары: НИКОГДА не читай entity.hp / sprite.hp — у спрайтов НЕТ свойства hp (здоровье храни в this.playerHP/this.enemyHP). Ширина полосы при создании — константа (100%), не выражение с делением. NaN в fillRect (undefined/100) = ФАТАЛЬНЫЙ краш Canvas (TypeError: non-finite), create() падает, игра чёрная.
+- Seed/replayability: this.seed и this.rng инициализируй ОДИН раз — в constructor() (из loadProgress(), как в каркасе); НИКОГДА не перезаписывай this.seed/this.rng в create() через Math.random — уровень станет невоспроизводимым, сохранённый прогресс игнорируется.
+- Счёт: this.registry.set('score', n) на КАЖДОЕ изменение счёта и обязательно перед scene.start('GameOverScene') — GameOverScene читает ТОЛЬКО registry.get('score') (или || 0); без set счёт всегда 0.
+- Одноразовые события/переходы сцен из update()-вызываемых методов защищай защёлкой: 'if (this.transitioning) return;' + 'this.transitioning = true;' ДО срабатывания (иначе victory()/gameOver() дублируются за кадры до переключения сцены: двойной звук, двойной Juice, многократный scene.start).
 
 ОБЯЗАТЕЛЬНО при правках: проверь каждый вызов .on(, .emit(, .destroy(), .setTexture() — объект ПЕРЕД вызовом не должен быть undefined (особенно this.events, this.input, this.music, this.sfx, кастомные объекты сцены, результаты this.scene.get(...) и this.physics.add.*). Если объект может не существовать к моменту вызова — добавь проверку (if (this.xxx)) или перенеси вызов в create() до его использования. Симптом этого бага: "Cannot read properties of undefined (reading 'on')".
 Также проверь ПОРЯДОК ВЫЗОВОВ в create(): любой метод, который получает this.player/this.enemy/другой игровой объект АРГУМЕНТОМ (this.cameras.main.startFollow(this.player,...), this.physics.add.collider(...), this.physics.add.overlap(...)), должен вызываться ПОСЛЕ строки, где этот объект создаётся (this.player = this.physics.add.sprite(...) и т.п.), а не до неё. Симптом: "Cannot read properties of undefined (reading 'x')" — сцена обрывается на этой строке, остальной create() не выполняется.
@@ -659,6 +670,58 @@ function detectWindowClassAccess(body) {
   return [...new Set(m)].map(x => `${x} — классы скелетона не попадают в window (top-level class в classic script), обращайся напрямую по имени (Juice.shake(...)), не через window.`);
 }
 
+// Двойная регистрация физики: makeCreature() уже возвращает physics.add.sprite (тело есть),
+// повторный this.physics.add.existing(this.X) пересоздаёт body — неопределённое поведение.
+function detectDoublePhysicsAdd(body) {
+  if (!body) return [];
+  const errs = [];
+  for (const m of body.matchAll(/this\.([A-Za-z_$][\w$]*)\s*=\s*makeCreature\s*\(/g)) {
+    const name = m[1];
+    if (new RegExp(`physics\\.add\\.existing\\(\\s*this\\.${name}\\s*\\)`).test(body)) {
+      errs.push(`this.${name} = makeCreature(...) уже возвращает Arcade-спрайт с телом — удали this.physics.add.existing(this.${name}) (повторная регистрация пересоздаёт body)`);
+    }
+  }
+  return errs;
+}
+
+// Чтение .hp у объекта без объявления: у спрайтов нет свойства hp (здоровье в this.playerHP),
+// undefined/100 = NaN в fillRect → фатальный краш Canvas (TypeError: non-finite), create() падает.
+function detectUndefinedHp(body) {
+  if (!body) return [];
+  const masked = maskNonCode(body); // убрать строки/комментарии (иначе упоминание в тексте — ложняк)
+  const errs = [];
+  const reads = new Set();
+  for (const m of masked.matchAll(/([A-Za-z_$][\w$]*)\.hp\b/g)) reads.add(m[1]);
+  const writes = new Set();
+  for (const m of masked.matchAll(/([A-Za-z_$][\w$]*)\.hp\s*=/g)) writes.add(m[1]);
+  for (const name of reads) {
+    if (writes.has(name)) continue;
+    errs.push(`${name}.hp — у спрайтов нет свойства hp (здоровье храни в this.playerHP/this.enemyHP); ${name}.hp === undefined → NaN в fillRect → ФАТАЛЬНЫЙ краш Canvas (TypeError: non-finite). Ширина полосы при создании — константа 100%.`);
+  }
+  return errs;
+}
+
+// Seed/rng переопределяется: this.rng должен инициализироваться ОДИН раз в constructor().
+// Повторная инициализация в create() ломает seed-based replayability (каждый запуск — новый уровень).
+function detectSeedOverride(body) {
+  if (!body) return [];
+  const masked = maskNonCode(body);
+  const rngCount = (masked.match(/this\.rng\s*=\s*new\s+Phaser\.Math\.RandomDataGenerator/g) || []).length;
+  if (rngCount > 1) {
+    return [`this.rng = new Phaser.Math.RandomDataGenerator создаётся ${rngCount} раза — this.rng/this.seed инициализируй ОДИН раз в constructor(), НЕ перезаписывай в create() (seed-based replayability ломается, прогресс игнорируется).`];
+  }
+  return [];
+}
+
+// GameOverScene читает registry.get('score'), но никто не пишет registry.set('score') → счёт всегда 0.
+function detectRegistryScore(body) {
+  if (!body) return [];
+  if (/registry\.get\('score'\)/.test(body) && !/registry\.set\('score'/.test(body)) {
+    return ['GameOverScene читает registry.get(\'score\'), но нигде нет registry.set(\'score\', n) — счёт всегда 0. Пиши this.registry.set(\'score\', n) на каждое изменение счёта и обязательно перед scene.start(\'GameOverScene\').'];
+  }
+  return [];
+}
+
 function detectUndefinedMethods(body) {
   if (!body) return [];
   const methods = new Set(['constructor']);
@@ -993,7 +1056,7 @@ async function reviewAndFix(html, description) {
       { role: 'user', content: `Игра по запросу: ${description}\n\nHTML-код игры:\n${html}` },
     ], { temperature: 0.3, max_tokens: 8192 });
     const fixed = ensureCdn(cleanHtml(raw));
-    const errs = qaHtml(fixed).concat(detectFixedApiCalls(fixed), detectColorStrings(fixed), detectEarlyCameraFollow(fixed), detectCollidersInUpdate(fixed), detectWindowClassAccess(fixed));
+    const errs = qaHtml(fixed).concat(detectFixedApiCalls(fixed), detectColorStrings(fixed), detectEarlyCameraFollow(fixed), detectCollidersInUpdate(fixed), detectWindowClassAccess(fixed), detectDoublePhysicsAdd(fixed), detectUndefinedHp(fixed), detectSeedOverride(fixed), detectRegistryScore(fixed));
     if (errs.length) return null;
     return fixed;
   } catch {
@@ -1009,7 +1072,7 @@ async function polishPass(html, description) {
       { role: 'user', content: `Игра по запросу: ${description}\n\nHTML-код игры:\n${html}` },
     ], { temperature: 0.3, max_tokens: 8192 });
     const polished = ensureCdn(cleanHtml(raw));
-    const errs = qaHtml(polished).concat(detectFixedApiCalls(polished), detectColorStrings(polished), detectEarlyCameraFollow(polished), detectCollidersInUpdate(polished), detectWindowClassAccess(polished));
+    const errs = qaHtml(polished).concat(detectFixedApiCalls(polished), detectColorStrings(polished), detectEarlyCameraFollow(polished), detectCollidersInUpdate(polished), detectWindowClassAccess(polished), detectDoublePhysicsAdd(polished), detectUndefinedHp(polished), detectSeedOverride(polished), detectRegistryScore(polished));
     if (errs.length) return null; // полировка что-то сломала — откатываем
     return polished;
   } catch {
@@ -1053,8 +1116,9 @@ async function generateNew(description, textures, baseCode, meta) {
       const earlyFollowErrs = detectEarlyCameraFollow(body);
       const colliderErrs = detectCollidersInUpdate(body);
       const windowClassErrs = detectWindowClassAccess(body);
+      const doublePhysErrs = detectDoublePhysicsAdd(body);
       const specMisses = checkSpecCoverage(html, spec);
-      const allErrs = [...errs, ...unknownMethods, ...fixedApiErrs, ...colorErrs, ...earlyFollowErrs, ...colliderErrs, ...windowClassErrs];
+      const allErrs = [...errs, ...unknownMethods, ...fixedApiErrs, ...colorErrs, ...earlyFollowErrs, ...colliderErrs, ...windowClassErrs, ...doublePhysErrs];
       return { html, body, errs: allErrs, specMisses, score: candidateScore({ html, errs: allErrs, specMisses }) };
     }).filter(Boolean);
 
