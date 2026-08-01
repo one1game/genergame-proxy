@@ -647,8 +647,9 @@ async function headlessSmoke(html) {
       // Контейнер Render (512MB): single-process/no-zygote — без них Chromium мгновенно
       // умирает с "Target closed". --disable-gpu (без unsafe-swiftshader) — WebGL недоступен,
       // Phaser сам падает на Canvas-рендерер, а проверка пикселей идёт через 2D — иначе
-      // программный GL съедает память и процесс убивается (ECONNRESET).
-      args: [...(args || []), '--no-sandbox', '--disable-setuid-sandbox', '--mute-audio', '--disable-dev-shm-usage', '--single-process', '--no-zygote', '--headless=new', '--disable-gpu'],
+      // программный GL съедает память и процесс убивается (ECONNRESET). Кап V8-кучи 256MB:
+      // тяжёлая игра упрётся в кап внутри Chromium (смоук зафиксирует ошибку), а не убьёт сервер.
+      args: [...(args || []), '--no-sandbox', '--disable-setuid-sandbox', '--mute-audio', '--disable-dev-shm-usage', '--single-process', '--no-zygote', '--headless=new', '--disable-gpu', '--js-flags=--max-old-space-size=256'],
     });
     const page = await browser.newPage();
     const consoleErrors = [];
