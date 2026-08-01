@@ -267,8 +267,8 @@ function saveHS(v){try{localStorage.setItem('game_highscore',String(v));}catch(e
 function loadProgress(){try{return JSON.parse(localStorage.getItem('game_progress')||'{}')||{};}catch(e){return {};}}
 function saveProgress(p){try{localStorage.setItem('game_progress',JSON.stringify(p||{}));}catch(e){}}
 // ======= Идентификация игры для лидерборда =======
-const GAME_ID = ${JSON.stringify((meta && meta.gameId) || '')};
-const GAME_SLUG = ${JSON.stringify((meta && meta.slug) || '')};
+// window.* (не const) — иначе не попадает в window и window.GAME_ID в фетче лидерборда всегда undefined
+window.GAME_ID = ${JSON.stringify((meta && meta.gameId) || '')};
 // ======= Генеративная музыка: арпеджио-луп, темп растёт со сложностью =======
 class Music {
   constructor(){ this.ctx=ensureAudio(); this.tempo=96; this.step=0; this.playing=false; this.timer=null; }
@@ -398,7 +398,7 @@ class MenuScene extends Phaser.Scene {
     btn.on('pointerover', () => btn.setTexture('btnHover'));
     btn.on('pointerout', () => btn.setTexture('btn'));
     btn.on('pointerdown', () => {
-      if (this.sfx && this.sfx.ctx.state === 'suspended') this.sfx.ctx.resume();
+      ensureAudio(); // стартовый экран уже resume'нул ctx, тут подстраховка
       this.scene.start('PlayScene');
     });
   }
@@ -616,7 +616,10 @@ function detectUndefinedMethods(body) {
 let _puppeteerPromise = null;
 function getPuppeteer() {
   if (!_puppeteerPromise) {
-    _puppeteerPromise = import('puppeteer').then(m => m.default).catch(() => null);
+    _puppeteerPromise = import('puppeteer').then(m => m.default).catch(e => {
+      console.log(`smoke: puppeteer/chromium unavailable: ${e && e.message}`);
+      return null;
+    });
   }
   return _puppeteerPromise;
 }
