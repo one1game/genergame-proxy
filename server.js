@@ -121,6 +121,14 @@ const PLAY_SCENE_PROMPT = `Ты — senior Phaser.js 3.87 разработчик
    - не оставляй мёртвый код: неиспользуемые переменные, флаги, обработчики, никогда не срабатывающие ветки;
    - если мир шире экрана — камера ОБЯЗАНА следовать за игроком (startFollow), иначе часть уровня недостижима;
    - тайминги согласованы: сообщение/анимация не короче отложенного рестарта.
+9. ПРОФЕССИОНАЛЬНЫЕ ПРИНЦИПЫ:
+   - разбей update() на helper-методы: updatePlayer()/updateEnemies()/checkCollisions()/updateHUD() — по одному действию на метод;
+   - все числовые настройки вынеси в константы вверху create()/класса (GRAVITY, SPEED, MAX_LIVES, JUMP_FORCE...) — без магических чисел в теле;
+   - ограничь количество сущностей (MAX_DRONES, MAX_PARTICLES и т.п.) — не плоди бесконечно, удаляй объекты за границами экрана;
+   - единая точка обновления UI: один метод updateHUD()/refreshUI(), вызывай его при любом изменении счёта/жизней/таймера — не обновляй текст в 10 местах;
+   - localStorage — ТОЛЬКО в try/catch (браузер может блокировать);
+   - если entity сложная (дрон/турель с логикой) — вынеси её в класс, наследуемый от Phaser.Physics.Arcade.Sprite, и добавь туда методы (update/shoot/onHit);
+   - используй delta из update(time, delta) для всех ручных таймеров/движений.
 
 ЧЕК-ЛИСТ ПЕРЕД ОТВЕТОМ: win/lose проверяются? juice реально в коде? звуки вызываются? нет запрещённых методов?
 ГЛАВНОЕ: игрок должен СТОЯТЬ на платформах/земле и МОЧЬ прыгать — не отключай body.checkCollision.down без причины, иначе игра неиграбельна (проваливание + мёртвый прыжок). Все текстуры, используемые в create() и в this.add.particles, должны быть созданы ДО их первого использования (this.make.graphics + generateTexture раньше, чем add.sprite/image/particles).
@@ -220,6 +228,8 @@ function ensureAudio(){
   return _actx;
 }
 document.getElementById('startScreen').addEventListener('pointerdown',function(){ensureAudio();this.style.display='none';});
+function loadHS(){try{return parseInt(localStorage.getItem('game_highscore')||'0',10);}catch(e){return 0;}}
+function saveHS(v){try{localStorage.setItem('game_highscore',String(v));}catch(e){}}
 class SFX {
   constructor(){ this.ctx=ensureAudio(); }
   play(freq, dur, type='square', vol=0.15){
@@ -270,7 +280,7 @@ class MenuScene extends Phaser.Scene {
     this.cameras.main.fadeIn(300);
     const cx = this.cameras.main.centerX, cy = this.cameras.main.centerY;
     this.add.text(cx, cy-160, '${safeTitle}', {fontFamily:'Arial', fontSize:'48px', color:'#ffffff', fontStyle:'bold'}).setOrigin(0.5);
-    const hs = parseInt(localStorage.getItem('game_highscore')||'0', 10);
+    const hs = loadHS();
     if (hs > 0) this.add.text(cx, cy-100, 'Лучший результат: ' + hs, {fontFamily:'Arial', fontSize:'22px', color:'#94a3b8'}).setOrigin(0.5);
     const btn = this.add.image(cx, cy, 'btn').setInteractive({useHandCursor:true});
     this.add.text(cx, cy, 'ИГРАТЬ', {fontFamily:'Arial', fontSize:'26px', color:'#ffffff', fontStyle:'bold'}).setOrigin(0.5);
@@ -287,8 +297,8 @@ class GameOverScene extends Phaser.Scene {
   create(data){
     this.cameras.main.fadeIn(300);
     const score = this.registry.get('score') || 0;
-    const prev = parseInt(localStorage.getItem('game_highscore')||'0', 10);
-    if (score > prev) localStorage.setItem('game_highscore', String(score));
+    const prev = loadHS();
+    if (score > prev) saveHS(score);
     const hs = Math.max(score, prev);
     const cx = this.cameras.main.centerX, cy = this.cameras.main.centerY;
     this.add.text(cx, cy-140, 'ИГРА ОКОНЧЕНА', {fontFamily:'Arial', fontSize:'40px', color:'#f43f5e', fontStyle:'bold'}).setOrigin(0.5);
