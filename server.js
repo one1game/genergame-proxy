@@ -693,7 +693,7 @@ async function headlessSmoke(html) {
     return errs.length ? errs : null;
   } catch (e) {
     console.log('smoke: error — ' + (e && e.message));
-    return null; // смоук не прошёл/не запустился — фиксируем в лог, но не роняем генерацию
+    return ['SMOKE error: ' + (e && e.message)]; // честный fail, а не молчаливый pass
   } finally {
     if (browser) browser.close().catch(() => {});
   }
@@ -1044,7 +1044,7 @@ const server = createServer(async (req, res) => {
     console.log(`✅ ${job.gameId} done in ${Date.now() - startTime}ms`);
 
     res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ ok: true, seo, smoke: result.smoke }));
+    res.end(JSON.stringify({ ok: true, seo, smoke: result.smoke, attempts: result.attempts, error: result.error || null }));
   } catch (err) {
     console.error(`❌ job error: ${err.message}`);
     res.writeHead(500, { 'Content-Type': 'application/json' });
