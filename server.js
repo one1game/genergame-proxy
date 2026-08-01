@@ -900,7 +900,13 @@ async function headlessSmoke(html) {
         if (!/Failed to load resource|net::ERR_/.test(t)) consoleErrors.push(t.slice(0, 200));
       }
     });
-    page.on('pageerror', e => consoleErrors.push(String((e && e.message) || e).slice(0, 200)));
+    page.on('pageerror', e => {
+      const msg = String((e && e.message) || e).slice(0, 160);
+      // Стек даёт номер строки в сгенерированном HTML — модель сможет точечно починить.
+      // URL может быть about:blank/data (setContent) — ищем любую строку стека с ":NN:NN".
+      const stackLine = (e && e.stack ? e.stack.split('\n').find(l => /:\d+:\d+/.test(l) && !/^\s*at\s*(Object\.)?<anonymous>$/.test(l)) : '') || '';
+      consoleErrors.push((msg + (stackLine ? ' [' + stackLine.trim().slice(0, 100) + ']' : '')).slice(0, 280));
+    });
     // preserveDrawingBuffer — чтобы readPixels работал вне кадра
     await page.evaluateOnNewDocument(() => {
       const orig = HTMLCanvasElement.prototype.getContext;
@@ -1117,8 +1123,11 @@ async function generateNew(description, textures, baseCode, meta) {
       const colliderErrs = detectCollidersInUpdate(body);
       const windowClassErrs = detectWindowClassAccess(body);
       const doublePhysErrs = detectDoublePhysicsAdd(body);
+      const undefHpErrs = detectUndefinedHp(body);
+      const seedOverErrs = detectSeedOverride(body);
+      const registryErrs = detectRegistryScore(body);
       const specMisses = checkSpecCoverage(html, spec);
-      const allErrs = [...errs, ...unknownMethods, ...fixedApiErrs, ...colorErrs, ...earlyFollowErrs, ...colliderErrs, ...windowClassErrs, ...doublePhysErrs];
+      const allErrs = [...errs, ...unknownMethods, ...fixedApiErrs, ...colorErrs, ...earlyFollowErrs, ...colliderErrs, ...windowClassErrs, ...doublePhysErrs, ...undefHpErrs, ...seedOverErrs, ...registryErrs];
       return { html, body, errs: allErrs, specMisses, score: candidateScore({ html, errs: allErrs, specMisses }) };
     }).filter(Boolean);
 
@@ -1171,10 +1180,24 @@ async function generateNew(description, textures, baseCode, meta) {
           error: (lastError || '') + '\n\nЛучшая попытка синтаксически битая: ' + syntaxErr,
         };
       }
+      // Fallback тоже гейтим headless-смоуком: синтаксически валидная игра может
+      // крашиться в рантайме (неопределённые методы, порядок инициализации) —
+      // битую игру НЕ отдаём, честный error лучше краша у юзера.
+      const smokeErrs = await headlessSmoke(bestOverall.html);
+      if (smokeErrs && smokeErrs !== 'SKIPPED' && smokeErrs.length) {
+        return {
+          html: null,
+          seo: null,
+          attempts: MAX_ATTEMPTS,
+          diagnosticHtml: bestOverall.html,
+          error: (lastError || '') + '\n\nЛучшая попытка падает в headless-смоуке:\n- ' + smokeErrs.join('\n- '),
+        };
+      }
       return {
         html: bestOverall.html,
         seo: parseSeo(bestOverall.html, description),
         attempts: MAX_ATTEMPTS,
+        smoke: smokeStatus,
         error: lastError || 'Ни одна попытка не прошла QA полностью',
       };
     }
@@ -1182,6 +1205,7 @@ async function generateNew(description, textures, baseCode, meta) {
       html: null,
       seo: null,
       attempts: MAX_ATTEMPTS,
+      smoke: smokeStatus,
       error: lastError || 'Генерация не удалась',
     };
   }
@@ -1205,11 +1229,12 @@ async function generateNew(description, textures, baseCode, meta) {
       attempts: MAX_ATTEMPTS,
       reviewed: false,
       smokeFallback: true,
+      smoke: 'fail',
       error: 'review/polish сломали рабочую игру, откат на версию до review:\n- ' + finalSmoke.join('\n- '),
     };
   }
 
-  return { html: final, seo: parseSeo(final, description), attempts: MAX_ATTEMPTS, reviewed: !!reviewed };
+  return { html: final, seo: parseSeo(final, description), attempts: MAX_ATTEMPTS, reviewed: !!reviewed, smoke: smokeStatus };
 }
 
 // Legacy-путь: полный HTML (улучшение существующей игры по baseCode)
@@ -1326,7 +1351,12 @@ const server = createServer(async (req, res) => {
     if (!result.html) {
       // Телеметрия: фиксируем фейл в БД, чтобы статистика ошибок была реальной (а не только в логах)
       try {
-        await updateGame(job.gameId, { status: 'failed', error_message: String(result.error || 'Generation failed').slice(0, 500) });
+        await updateGame(job.gameId, {
+          status: 'failed',
+          error_message: String(result.error || 'Generation failed').slice(0, 500),
+          // Диагностика: сохраняем лучшую попытку даже при провале — по ней видно строку краша
+          source_code: result.diagnosticHtml || null,
+        });
       } catch (_) { /* не критично для ответа */ }
       res.writeHead(500, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ error: result.error || 'Generation failed' }));
