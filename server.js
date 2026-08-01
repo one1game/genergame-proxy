@@ -92,7 +92,7 @@ const PLAY_SCENE_PROMPT = `Ты — senior Phaser.js 3.87 разработчик
 - this.sfx — экземпляр класса SFX с готовыми эффектами: this.sfx.jump(), this.sfx.dash(), this.sfx.collect(), this.sfx.hit(), this.sfx.win(), this.sfx.over(), this.sfx.levelup(), this.sfx.combo(), this.sfx.shield(), this.sfx.gameover(), this.sfx.victory(). Плюс низкоуровневый this.sfx.play(freq, dur, type, vol). Вызывай нужный звук на каждое событие.
 - this.registry.set('score', n) / this.registry.get('score') — очки. GameOverScene сама прочитает score и сохранит рекорд.
 - this.scene.start('GameOverScene') — завершение игры (победа/поражение).
-- Готовые эффекты (Juice SDK) — НЕ пиши партиклы/тряску/попапы руками, вызывай: Juice.shake(this, i), Juice.burst(this, x, y, color, n), Juice.popText(this, x, y, text, color), Juice.comboFlash(this, x, y, mult). Это фирменный стиль игры.
+- Готовые эффекты (Juice SDK) — НЕ пиши партиклы/тряску/попапы руками, вызывай: Juice.shake(this, intensity), Juice.burst(this, x, y, color, n), Juice.popText(this, x, y, text, color), Juice.comboFlash(this, x, y, mult). Это фирменный стиль игры. ВАЖНО: Juice.shake(this, intensity) — intensity в диапазоне 0.005–0.05 (доля экрана), НЕ пиксели: сильный удар 0.04–0.05, обычный 0.015–0.025, лёгкий 0.005–0.01. Никогда не передавай 5–20.
 - Музыка: this.music = new Music(); this.music.start() — генеративный саундтрек уже готов; this.music.setTempo(bpm) — ускоряй темп по difficulty_curve (например 96 + level*12). Никогда не создавай второй экземпляр Music.
 - Уровень: генерируй мир через this.rng (this.rng.between(a,b), this.rng.pick(arr), this.rng.frac()) и this.seed — НЕ через Math.random. Покажи this.seed в HUD как '#seed' — у каждого юзера свой воспроизводимый уровень.
 - Существа: makeCreature(this, 'key', seed, [c1,c2,c3]) — процедурный спрайт из примитивов (мягкий блоб, не квадрат) для игрока/врагов; палитру бери из art_style.palette.
@@ -603,6 +603,27 @@ function candidateScore(c) {
 // Детектор неопределённых методов: модель вызвала this.foo(), но foo не объявлен
 // в классе и не является объектом Phaser. Ловит ReferenceError-краши на этапе QA,
 // до того как игра попадёт к юзеру.
+// Детектор вызовов на fixed-объектах каркаса: this.sfx.*(), this.music.*(), Juice.*
+// Скелетон фиксированный — список методов конечен. Модель вызывает this.sfx.boost()
+// (метода нет) — регекс this.xxx() его не видит, а здесь это краш на первом же событии.
+function detectFixedApiCalls(body) {
+  if (!body) return [];
+  const errs = [];
+  const sfxMethods = new Set(['play','tone','jump','dash','collect','hit','win','over','levelup','combo','shield','gameover','victory']);
+  const musicMethods = new Set(['start','stop','setTempo']);
+  const juiceMethods = new Set(['shake','burst','popText','comboFlash']);
+  for (const m of body.matchAll(/this\.sfx\.([A-Za-z_$][\w$]*)\s*\(/g)) {
+    if (!sfxMethods.has(m[1])) errs.push(`this.sfx.${m[1]}() не существует — доступны: ${[...sfxMethods].join(', ')}`);
+  }
+  for (const m of body.matchAll(/this\.music\.([A-Za-z_$][\w$]*)\s*\(/g)) {
+    if (!musicMethods.has(m[1])) errs.push(`this.music.${m[1]}() не существует — доступны: ${[...musicMethods].join(', ')}`);
+  }
+  for (const m of body.matchAll(/Juice\.([A-Za-z_$][\w$]*)\s*\(/g)) {
+    if (!juiceMethods.has(m[1])) errs.push(`Juice.${m[1]}() не существует — доступны: ${[...juiceMethods].join(', ')}`);
+  }
+  return errs;
+}
+
 function detectUndefinedMethods(body) {
   if (!body) return [];
   const methods = new Set(['constructor']);
@@ -816,7 +837,7 @@ async function reviewAndFix(html, description) {
       { role: 'user', content: `Игра по запросу: ${description}\n\nHTML-код игры:\n${html}` },
     ], { temperature: 0.3, max_tokens: 8192 });
     const fixed = ensureCdn(cleanHtml(raw));
-    const errs = qaHtml(fixed);
+    const errs = qaHtml(fixed).concat(detectFixedApiCalls(fixed));
     if (errs.length) return null;
     return fixed;
   } catch {
@@ -832,7 +853,7 @@ async function polishPass(html, description) {
       { role: 'user', content: `Игра по запросу: ${description}\n\nHTML-код игры:\n${html}` },
     ], { temperature: 0.3, max_tokens: 8192 });
     const polished = ensureCdn(cleanHtml(raw));
-    const errs = qaHtml(polished);
+    const errs = qaHtml(polished).concat(detectFixedApiCalls(polished));
     if (errs.length) return null; // полировка что-то сломала — откатываем
     return polished;
   } catch {
@@ -871,8 +892,10 @@ async function generateNew(description, textures, baseCode, meta) {
       const errs = qaHtml(html);
       const unknownMethods = detectUndefinedMethods(body)
         .map(n => `Метод this.${n}() вызывается, но не определён в классе PlayScene — добавь его реализацию (или удали вызов)`);
+      const fixedApiErrs = detectFixedApiCalls(body);
       const specMisses = checkSpecCoverage(html, spec);
-      return { html, body, errs: [...errs, ...unknownMethods], specMisses, score: candidateScore({ html, errs: [...errs, ...unknownMethods], specMisses }) };
+      const allErrs = [...errs, ...unknownMethods, ...fixedApiErrs];
+      return { html, body, errs: allErrs, specMisses, score: candidateScore({ html, errs: allErrs, specMisses }) };
     }).filter(Boolean);
 
     if (!candidates.length) {
