@@ -100,7 +100,7 @@ const PLAY_SCENE_PROMPT = `Ты — senior Phaser.js 3.87 разработчик
 - Время: this.time.addEvent({delay, callback, loop}) — НЕ setInterval.
 - Физика: this.physics.add.* / this.physics.world.enable(...). Коллизии: this.physics.add.overlap/collider.
 
-ЗАПРЕЩЕНО (брак): setColor, setZIndex, setAnchor, setOpacity, this.add.tween, setInterval, this.sound.add. Для скруглений/цвета — make.graphics + setTint. Для анимаций — this.tweens.add. Для звука — this.sfx.play.
+ЗАПРЕЩЕНО (брак): setZIndex, setAnchor, setOpacity, this.add.tween, setInterval, this.sound.add. Для скруглений/цвета — make.graphics + setTint. Для анимаций — this.tweens.add. Для звука — this.sfx.play. (Примечание: setColor() легален для текста Phaser.Text, но для спрайтов его нет.)
 ЗАПРЕЩЕНО ОБЪЯВЛЯТЬ: class Music, class Juice, class SFX — эти классы уже определены в каркасе ГЛОБАЛЬНО. Используй this.music / this.sfx / Juice.* как есть, не дублируй их объявления (иначе SyntaxError: Identifier already declared).
 
 ОБЯЗАТЕЛЬНО:
@@ -488,7 +488,8 @@ function checkSyntax(html) {
 }
 
 const BANNED = [
-  { re: /setColor\(/i, name: 'setColor() → setTint()' },
+  // setColor убран: это валидный API для Phaser.Text (текст), а для спрайтов его
+  // отсутствие поймает headless-смоук как runtime-ошибку "setColor is not a function"
   { re: /setZIndex\(/i, name: 'setZIndex() → setDepth()' },
   { re: /setAnchor\(/i, name: 'setAnchor() → setOrigin()' },
   { re: /setOpacity\(/i, name: 'setOpacity() → setAlpha()' },
