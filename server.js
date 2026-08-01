@@ -608,30 +608,40 @@ function detectUndefinedMethods(body) {
 }
 
 // ============================================================
-// Headless-смоук (puppeteer): ловим runtime-баги, которые vm.Script не видит
+// Headless-смоук (puppeteer-core): ловим runtime-баги, которые vm.Script не видит
 // Открывает HTML, 5 сек автоигры (рандомные тапы), снимает console.error,
 // проверяет, что canvas реально отрисовался (не пустой/однотонный).
-// Если Chromium недоступен на хосте — смоук тихо пропускается.
+// Chromium берётся из @sparticuz/chromium (бинарник + либы внутри npm-пакета) —
+// работает в нативном Node-образе Render без системных apt-зависимостей.
 // ============================================================
 let _puppeteerPromise = null;
 function getPuppeteer() {
   if (!_puppeteerPromise) {
-    _puppeteerPromise = import('puppeteer').then(m => m.default).catch(e => {
-      console.log(`smoke: puppeteer/chromium unavailable: ${e && e.message}`);
-      return null;
-    });
+    _puppeteerPromise = (async () => {
+      try {
+        const puppeteer = (await import('puppeteer-core')).default;
+        const chromium = (await import('@sparticuz/chromium')).default || (await import('@sparticuz/chromium'));
+        const executablePath = await chromium.executablePath();
+        return { puppeteer, executablePath, args: chromium.args };
+      } catch (e) {
+        console.log(`smoke: puppeteer/chromium unavailable: ${e && e.message}`);
+        return null;
+      }
+    })();
   }
   return _puppeteerPromise;
 }
 
 async function headlessSmoke(html) {
-  const puppeteer = await getPuppeteer();
-  if (!puppeteer) return null; // Chromium не установлен — смоук пропускаем
+  const pp = await getPuppeteer();
+  if (!pp) return null; // Chromium недоступен — смоук пропускаем
+  const { puppeteer, executablePath, args } = pp;
   let browser = null;
   try {
     browser = await puppeteer.launch({
+      executablePath,
       headless: true,
-      args: ['--no-sandbox', '--disable-setuid-sandbox', '--mute-audio', '--disable-dev-shm-usage', '--use-gl=swiftshader'],
+      args: [...(args || []), '--no-sandbox', '--disable-setuid-sandbox', '--mute-audio', '--disable-dev-shm-usage', '--use-gl=swiftshader'],
     });
     const page = await browser.newPage();
     const consoleErrors = [];
@@ -679,9 +689,11 @@ async function headlessSmoke(html) {
     const errs = [];
     if (consoleErrors.length) errs.push('SMOKE runtime: ' + consoleErrors.slice(0, 3).join(' | '));
     if (!canvas.ok) errs.push('SMOKE canvas: ' + canvas.reason);
+    if (!errs.length) console.log('smoke: ok — ' + canvas.reason);
     return errs.length ? errs : null;
   } catch (e) {
-    return null; // Chromium недоступен на хосте — смоук пропускаем без падения
+    console.log('smoke: error — ' + (e && e.message));
+    return null; // смоук не прошёл/не запустился — фиксируем в лог, но не роняем генерацию
   } finally {
     if (browser) browser.close().catch(() => {});
   }
