@@ -662,7 +662,7 @@ function detectWindowClassAccess(body) {
 function detectUndefinedMethods(body) {
   if (!body) return [];
   const methods = new Set(['constructor']);
-  for (const m of body.matchAll(/^\s+([A-Za-z_$][\w$]*)\s*\([^)]*\)\s*\{/gm)) methods.add(m[1]);
+  for (const m of body.matchAll(/^\s*([A-Za-z_$][\w$]*)\s*\([^)]*\)\s*\{/gm)) methods.add(m[1]);
   // Сущности, присвоенные из фабрик Phaser (спрайты/группы/тексты) — их методы валидны
   const entities = new Set();
   for (const m of body.matchAll(/this\.([A-Za-z_$][\w$]*)\s*=\s*this\.(?:add|physics|make|scene|time|data|cache)\./g)) entities.add(m[1]);
