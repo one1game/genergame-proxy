@@ -931,7 +931,7 @@ function getPuppeteer() {
 }
 
 async function headlessSmoke(html) {
-  if (process.env.SMOKE_SKIP === '1') { console.log('smoke: SKIPPED (SMOKE_SKIP=1, локальный тест)'); return 'SKIPPED'; }
+  if (process.env.SMOKE_SKIP === '1' || !process.env.SMOKE_ENABLED) { console.log('smoke: SKIPPED (SMOKE_ENABLED=1 включает прод-смоук; по умолчанию выключен — Chromium OOM-ит free-tier Render)'); return 'SKIPPED'; }
   const pp = await getPuppeteer();
   if (!pp) return 'SKIPPED'; // Chromium недоступен — смоук пропускаем (видно в ответе генерации)
   const { puppeteer, executablePath, args } = pp;
@@ -1351,15 +1351,6 @@ const server = createServer({ requestTimeout: 0, headersTimeout: 0 }, async (req
   if (req.method === 'GET' && req.url === '/health') {
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ ok: true, rev: '640c1c9' }));
-    return;
-  }
-
-  // Диагностика: отвечает через 360с (без DeepSeek) — проверка таймаута платформы
-  if (req.method === 'GET' && req.url === '/slowtest') {
-    setTimeout(() => {
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ ok: true, slow: 360 }));
-    }, 360_000);
     return;
   }
 
