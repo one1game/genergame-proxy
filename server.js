@@ -1135,6 +1135,9 @@ function detectCreateOrderDeps(body) {
       if (knownBefore.has(y)) continue;
       if (!assignedInCreate.has(y) && ![...methods.keys()].some(mn => createsOf(mn).has(y))) continue; // поле вообще не создаётся в create — не наша забота
       const m = methods.get(name).seg.match(new RegExp('this\\.' + y + '\\s*\\.'));
+      // Гард: если поле совпало с именем вызываемого метода (this.dash = флаг + метод dash()),
+      // `this.y\s*\.` не находится — m = null, иначе TypeError: Cannot read properties of null
+      if (!m) continue;
       errs.push(`Строка ${lineOf(body, methods.get(name).start + m.index)}: ${name}() вызывается из create() и читает this.${y} ДО его инициализации — объект ещё undefined → TypeError (Cannot read properties of undefined). В create() соблюдай порядок: сначала создавай игрока/землю/группы, и ТОЛЬКО ПОТОМ вызывай методы, которые на них ссылаются (частицы со startFollow, камера и т.п.). Либо передавай ссылку аргументом: createEnvironmentParticles(player)`);
     }
   }
@@ -1531,9 +1534,10 @@ async function generateNew(description, textures, baseCode, meta) {
 
     const candidates = bodies.map((rawBody) => {
       if (!rawBody) return null;
-      const body = cleanPlaySceneBody(rawBody);
-      if (!body) return null;
-      const html = buildGameHtml(body, spec, description, meta);
+      try {
+        const body = cleanPlaySceneBody(rawBody);
+        if (!body) return null;
+        const html = buildGameHtml(body, spec, description, meta);
       const errs = qaHtml(html);
       const unknownMethods = detectUndefinedMethods(body)
         .map(n => `Метод this.${n}() вызывается, но не определён в классе PlayScene — добавь его реализацию (или удали вызов)`);
@@ -1567,6 +1571,12 @@ async function generateNew(description, textures, baseCode, meta) {
       const specMisses = checkSpecCoverage(html, spec);
       const allErrs = [...errs, ...unknownMethods, ...fixedApiErrs, ...colorErrs, ...earlyFollowErrs, ...colliderErrs, ...windowClassErrs, ...doublePhysErrs, ...undefHpErrs, ...seedOverErrs, ...missingNewErrs, ...registryErrs, ...fallbackErrs, ...overlayErrs, ...missingCbErrs, ...uncalledErrs, ...dynTexErrs, ...fillColorErrs, ...postFXErrs, ...noGroundErrs, ...hitNoInvincibleErrs, ...spawnOobErrs, ...untrackedTimerErrs, ...countActiveErrs, ...speedUncappedErrs, ...doubleJumpErrs, ...particleStopErrs, ...createOrderErrs, ...rawTitleErrs];
       return { html, body, errs: allErrs, specMisses, score: candidateScore({ html, errs: allErrs, specMisses }) };
+      } catch (e) {
+        // Детектор не должен ронять ВСЮ генерацию: сбой на одном кандидате = QA-замечание для
+        // самокритики, а не failed-игра с невнятной ошибкой "reading 'index'"
+        console.error('QA detector crashed on candidate: ' + (e && e.stack || e));
+        return { html: buildGameHtml(rawBody, spec, description, meta), body: rawBody, errs: ['Внутренняя ошибка QA при разборе кандидата: ' + String((e && e.message) || e) + ' — почини код так, чтобы детекторы не падали'], specMisses: [], score: 0 };
+      }
     }).filter(Boolean);
 
     if (!candidates.length) {
@@ -1785,11 +1795,13 @@ const server = createServer({ requestTimeout: 0, headersTimeout: 0 }, async (req
   res.end(JSON.stringify({ ok: true, accepted: true, gameId: job.gameId }));
 
   runJob(job, startTime).catch((err) => {
-    console.error(`❌ job error: ${err.message}`);
+    console.error(`❌ job error: ${(err && err.stack) || err}`);
     // Юзера уведомит вотчдог (cron): помечаем failed здесь же, чтобы не ждать 10 минут.
-    updateGame(job.gameId, { status: 'failed', error_message: String(err.message).slice(0, 500) }).catch(() => {});
+    // Пишем СТЕК (строка + файл), а не только message — по message типа "reading 'index'"
+    // место краша не найти, по стеку видно точный детектор/строку.
+    updateGame(job.gameId, { status: 'failed', error_message: String((err && err.stack) || err).slice(0, 500) }).catch(() => {});
     // + немедленный callback: вотчдог ждёт до 10 минут, а юзер не должен молчать всё это время
-    notifyUser(job, 'failed', err.message).catch(() => {});
+    notifyUser(job, 'failed', String((err && err.message) || err)).catch(() => {});
   });
 });
 
