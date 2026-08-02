@@ -130,6 +130,8 @@ const PLAY_SCENE_PROMPT = `Ты — senior Phaser.js 3.87 разработчик
     - комбо-система: быстрый сбор подряд накапливает множитель (🔥 x5), показывается в HUD и затухает через пару секунд;
     - пауза: клавиша ESC + кнопка ⏸ → this.physics.pause() + оверлей «ПАУЗА» с «ПРОДОЛЖИТЬ» (this.physics.resume());
     - щит/неуязвимость с видимым пузырём-графикой (this.add.circle + setStrokeStyle вокруг игрока) и отрисовкой повреждений.
+    - мета-прогрессия через loadProgress()/saveProgress(): для дефолтов используй Object.assign({damage:0,speed:0,shield:0,regen:0}, loadProgress()) — НИКОГДА loadProgress() || {...}: loadProgress() всегда возвращает объект (минимум {}), пустой {} truthy, фолбэк мёртв, у нового игрока поля станут undefined → NaN-урон → врага/раунд невозможно выиграть;
+    - фоновые/декоративные элементы (подложка арены, floor tint, атмосферные прямоугольники) добавляй с .setDepth(-10) или ниже и альфой ≤ 0.5 — никогда не полагайся на порядок добавления для фона: объекты рисуются в порядке добавления, "фон" после пола/стен перекроет их и затемнит игру;
 7. ЭСТЕТИКА: единая палитра из ТЗ (art_style.palette), у объектов тени/свечение через setShadow или tint, чистая композиция, ничего не выглядит "голым текстом".
 8. ЧИСТЫЙ КОД (критично, как senior-разработчик):
    - кешируй в create() всё, что нужно update(): клавиши (const keys = this.input.keyboard.addKeys(...) ОДИН раз), спрайты, тексты — НИКОГДА не вызывай this.input.keyboard.addKeys / this.add.* / this.physics.add.* внутри update();
@@ -192,6 +194,9 @@ const CRITIQUE_PROMPT = `Ты — строгий самокритик геймп
 - Полоски HP/бары: НИКОГДА не читай entity.hp / sprite.hp — у спрайтов НЕТ свойства hp (здоровье храни в this.playerHP/this.enemyHP). Ширина полосы при создании — константа (100%), не выражение с делением. NaN в fillRect (undefined/100) = ФАТАЛЬНЫЙ краш Canvas (TypeError: non-finite), create() падает, игра чёрная.
 - Seed/replayability: this.seed и this.rng инициализируй ОДИН раз — в constructor() (из loadProgress(), как в каркасе); НИКОГДА не перезаписывай this.seed/this.rng в create() через Math.random — уровень станет невоспроизводимым, сохранённый прогресс игнорируется.
 - Счёт: this.registry.set('score', n) на КАЖДОЕ изменение счёта и обязательно перед scene.start('GameOverScene') — GameOverScene читает ТОЛЬКО registry.get('score') (или || 0); без set счёт всегда 0.
+- loadProgress() || {defaults} — фолбэк мёртв: loadProgress() всегда возвращает объект (минимум {}), пустой {} truthy, дефолты справа не выполнятся, у нового игрока поля undefined → NaN-урон → цель не побеждается. Дефолты ТОЛЬКО через Object.assign({damage:0,...}, loadProgress()).
+- Фоновые прямоугольники/декор (подложка арены, floor tint): .setDepth(-10) или ниже + альфа ≤ 0.5 — не полагайся на порядок добавления (объекты рисуются в порядке добавления, фон после пола/стен затемнит игру).
+- time.addEvent({callback: this.XXX}) — колбэк должен быть СУЩЕСТВУЮЩИМ методом класса: this.XXX на момент создания конфига undefined → TypeError через delay секунд → тихая заморозка кадра, таймер не убывает. Типовой кейс: метод updateTimers(delta) (per-frame), а в addEvent передано this.updateTimer — сверяй имена точно, буква в букву.
 - Одноразовые события/переходы сцен из update()-вызываемых методов защищай защёлкой: 'if (this.transitioning) return;' + 'this.transitioning = true;' ДО срабатывания (иначе victory()/gameOver() дублируются за кадры до переключения сцены: двойной звук, двойной Juice, многократный scene.start).
 
 ОБЯЗАТЕЛЬНО при правках: проверь каждый вызов .on(, .emit(, .destroy(), .setTexture() — объект ПЕРЕД вызовом не должен быть undefined (особенно this.events, this.input, this.music, this.sfx, кастомные объекты сцены, результаты this.scene.get(...) и this.physics.add.*). Если объект может не существовать к моменту вызова — добавь проверку (if (this.xxx)) или перенеси вызов в create() до его использования. Симптом этого бага: "Cannot read properties of undefined (reading 'on')".
@@ -341,7 +346,7 @@ class Juice {
 }
 // ======= Фирменный постпроцессинг: bloom + vignette поверх scanlines =======
 function applyPostFX(cam){
-  try{ cam.postFX.addBloom(0xffffff,0.35,1,0.35,1.4); cam.postFX.addVignette(0.25,0.8); }catch(e){}
+  try{ cam.postFX.addBloom(0xffffff,0.35,1,0.35,1.4); cam.postFX.addVignette(0.5,0.5,0.8,0.3); }catch(e){}
 }
 // ======= Процедурные существа: блоб из примитивов по seed (не квадраты) =======
 function makeCreature(scene, key, seed, palette){
@@ -722,6 +727,56 @@ function detectRegistryScore(body) {
   return [];
 }
 
+// loadProgress()/loadHS() ВСЕГДА возвращают объект (минимум {}), никогда null/undefined.
+// Пустой объект {} — truthy, значит loadProgress() || {defaults} НИКОГДА не срабатывает:
+// у нового игрока (пустой localStorage = каждый первый запуск) playerUpgrades = {},
+// поле damage === undefined → undefined*5 = NaN → enemyHealth -= NaN → NaN навсегда,
+// NaN <= 0 всегда false → победа боевыми действиями невозможна. Молчаливая порча данных —
+// не краш, смоук и консоль не видят.
+function detectDeadFallback(body) {
+  if (!body) return [];
+  const errs = [];
+  for (const m of body.matchAll(/loadProgress\(\)\s*\|\|\s*\{/g)) {
+    errs.push('loadProgress() || {...} — фолбэк мёртв: loadProgress() всегда возвращает объект (минимум {}), пустой {} truthy, дефолты справа не выполнятся. У нового игрока поля undefined → NaN-урон → враг не побеждается. Используй Object.assign({damage:0,...}, loadProgress()) или ?? по каждому полю.');
+  }
+  return errs;
+}
+
+// time.addEvent({callback: this.XXX}) ссылается на метод класса, которого нет —
+// this.XXX на момент создания конфига undefined, через delay секунд Phaser вызывает
+// undefined как функцию → TypeError внутри игрового цикла → тихая заморозка кадра
+// (не краш: canvas жив, консоль может быть пустой). Плюс логика таймера вообще не
+// работает. Тот же класс "метод как значение, а не вызов", что window.Juice/overlap.
+function detectMissingEventCallback(body) {
+  if (!body) return [];
+  const errs = [];
+  const re = /callback:\s*this\.(\w+)/g;
+  let m;
+  while ((m = re.exec(body))) {
+    const method = m[1];
+    if (method === 'self') continue;
+    if (!new RegExp(`\\n\\s*${method}\\s*\\(`).test(body)) {
+      errs.push(`time.addEvent callback: this.${method} — такого метода нет в классе (похоже на updateTimer vs updateTimers). this.${method} на момент создания конфига undefined → TypeError через delay секунд → заморозка кадра, таймер не убывает. Передавай существующий метод класса.`);
+    }
+  }
+  return errs;
+}
+
+// Почти непрозрачный фоновый прямоугольник без явной depth: в Phaser объекты рисуются
+// в порядке добавления (кто добавлен позже — выше по слоям). Модель часто добавляет
+// "фон арены" ПОСЛЕ пола/стен → прямоугольник с alpha 0.6-0.9 ложится ПОВЕРХ мира и
+// затемняет игру ("полузатемнено"). Фоновый декор — .setDepth(-10) или ниже + альфа ≤ 0.5.
+function detectDarkOverlayRect(body) {
+  if (!body) return [];
+  const errs = [];
+  for (const line of body.split('\n')) {
+    if (/this\.add\.rectangle\([^)]*\)\.setAlpha\(0\.[6-9]/.test(line) && !/\.setDepth\(/.test(line)) {
+      errs.push('Почти непрозрачный прямоугольник без setDepth: ' + line.trim().slice(0, 90) + ' — в Phaser порядок добавления = слой, "фон" после пола/стен перекроет их и затемнит игру. Добавь .setDepth(-10) (декор фоном, с альфой ≤ 0.5).');
+    }
+  }
+  return errs;
+}
+
 function detectUndefinedMethods(body) {
   if (!body) return [];
   const methods = new Set(['constructor']);
@@ -1062,7 +1117,7 @@ async function reviewAndFix(html, description) {
       { role: 'user', content: `Игра по запросу: ${description}\n\nHTML-код игры:\n${html}` },
     ], { temperature: 0.3, max_tokens: 8192 });
     const fixed = ensureCdn(cleanHtml(raw));
-    const errs = qaHtml(fixed).concat(detectFixedApiCalls(fixed), detectColorStrings(fixed), detectEarlyCameraFollow(fixed), detectCollidersInUpdate(fixed), detectWindowClassAccess(fixed), detectDoublePhysicsAdd(fixed), detectUndefinedHp(fixed), detectSeedOverride(fixed), detectRegistryScore(fixed));
+    const errs = qaHtml(fixed).concat(detectFixedApiCalls(fixed), detectColorStrings(fixed), detectEarlyCameraFollow(fixed), detectCollidersInUpdate(fixed), detectWindowClassAccess(fixed), detectDoublePhysicsAdd(fixed), detectUndefinedHp(fixed), detectSeedOverride(fixed), detectRegistryScore(fixed), detectDeadFallback(fixed), detectDarkOverlayRect(fixed), detectMissingEventCallback(fixed));
     if (errs.length) return null;
     return fixed;
   } catch {
@@ -1078,7 +1133,7 @@ async function polishPass(html, description) {
       { role: 'user', content: `Игра по запросу: ${description}\n\nHTML-код игры:\n${html}` },
     ], { temperature: 0.3, max_tokens: 8192 });
     const polished = ensureCdn(cleanHtml(raw));
-    const errs = qaHtml(polished).concat(detectFixedApiCalls(polished), detectColorStrings(polished), detectEarlyCameraFollow(polished), detectCollidersInUpdate(polished), detectWindowClassAccess(polished), detectDoublePhysicsAdd(polished), detectUndefinedHp(polished), detectSeedOverride(polished), detectRegistryScore(polished));
+    const errs = qaHtml(polished).concat(detectFixedApiCalls(polished), detectColorStrings(polished), detectEarlyCameraFollow(polished), detectCollidersInUpdate(polished), detectWindowClassAccess(polished), detectDoublePhysicsAdd(polished), detectUndefinedHp(polished), detectSeedOverride(polished), detectRegistryScore(polished), detectDeadFallback(polished), detectDarkOverlayRect(polished), detectMissingEventCallback(polished));
     if (errs.length) return null; // полировка что-то сломала — откатываем
     return polished;
   } catch {
@@ -1126,8 +1181,11 @@ async function generateNew(description, textures, baseCode, meta) {
       const undefHpErrs = detectUndefinedHp(body);
       const seedOverErrs = detectSeedOverride(body);
       const registryErrs = detectRegistryScore(body);
+      const fallbackErrs = detectDeadFallback(body);
+      const overlayErrs = detectDarkOverlayRect(body);
+      const missingCbErrs = detectMissingEventCallback(body);
       const specMisses = checkSpecCoverage(html, spec);
-      const allErrs = [...errs, ...unknownMethods, ...fixedApiErrs, ...colorErrs, ...earlyFollowErrs, ...colliderErrs, ...windowClassErrs, ...doublePhysErrs, ...undefHpErrs, ...seedOverErrs, ...registryErrs];
+      const allErrs = [...errs, ...unknownMethods, ...fixedApiErrs, ...colorErrs, ...earlyFollowErrs, ...colliderErrs, ...windowClassErrs, ...doublePhysErrs, ...undefHpErrs, ...seedOverErrs, ...registryErrs, ...fallbackErrs, ...overlayErrs, ...missingCbErrs];
       return { html, body, errs: allErrs, specMisses, score: candidateScore({ html, errs: allErrs, specMisses }) };
     }).filter(Boolean);
 
