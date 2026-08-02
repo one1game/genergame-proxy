@@ -33,7 +33,9 @@ try {
     };
   });
   try {
-    await page.setContent(game.source_code, { waitUntil: 'networkidle0', timeout: 25000 });
+    // networkidle2: networkidle0 никогда не наступает на Phaser-страницах (25с ложный таймаут),
+    // хотя всё загружается за <1с. networkidle2 ждёт <=2 активных запроса — для CDN+WebGL достаточно.
+    await page.setContent(game.source_code, { waitUntil: 'networkidle2', timeout: 25000 });
   } catch (e) { errs.push('setContent: ' + e.message); }
   await new Promise(r => setTimeout(r, 2000));
   for (let i = 0; i < 4; i++) {
