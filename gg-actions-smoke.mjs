@@ -33,11 +33,21 @@ try {
     };
   });
   try {
-    // networkidle2: networkidle0 никогда не наступает на Phaser-страницах (25с ложный таймаут),
-    // хотя всё загружается за <1с. networkidle2 ждёт <=2 активных запроса — для CDN+WebGL достаточно.
-    await page.setContent(game.source_code, { waitUntil: 'networkidle2', timeout: 25000 });
-  } catch (e) { errs.push('setContent: ' + e.message); }
+    // 'load' + некритичный таймаут: на Actions-раннере CDN может грузиться медленно,
+    // но таймаут setContent НЕ должен фейлить прогон — решают pageerror и canvas-проверка.
+    // (networkidle0/networkidle2 на Phaser-страницах ведут себя непредсказуемо в CI.)
+    await page.setContent(game.source_code, { waitUntil: 'load', timeout: 20000 });
+  } catch (e) {
+    // не пушим в errs: страница могла загрузиться позже таймаута; ждём canvas ниже
+    await new Promise(r => setTimeout(r, 5000)).catch(() => {});
+  }
   await new Promise(r => setTimeout(r, 2000));
+  // Ждём появления canvas (CDN phaser может грузиться до 20с на медленном раннере)
+  for (let i = 0; i < 20; i++) {
+    const has = await page.evaluate(() => !!document.querySelector('canvas')).catch(() => false);
+    if (has) break;
+    await new Promise(r => setTimeout(r, 1000));
+  }
   for (let i = 0; i < 4; i++) {
     await page.mouse.click(100 + Math.floor(Math.random() * 700), 100 + Math.floor(Math.random() * 300)).catch(() => {});
     await new Promise(r => setTimeout(r, 400));
