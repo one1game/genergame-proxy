@@ -292,11 +292,23 @@ function buildUserPrompt(description, textures, lastError, baseCode) {
 // SKELETON — фиксированный, руками протестированный каркас.
 // Модель вставляет сюда только тело PlayScene.
 // ============================================================
+// Режет по словам, не по символам — чтобы не выходило "...собери 10 артефакт"
+function safeTruncate(str, maxLen) {
+  const s = String(str || '').trim();
+  if (s.length <= maxLen) return s;
+  const cut = s.slice(0, maxLen);
+  const sp = cut.lastIndexOf(' ');
+  return (sp > maxLen * 0.5 ? cut.slice(0, sp) : cut) + '…';
+}
+// Страховка: если сырой запрос юзера с /create|/creat дотянулся до генерации — срезаем префикс
+function cleanRawDescription(d) {
+  return String(d || '').replace(/^\/(create|creat)(@\w+)?\s*/i, '').trim();
+}
 function buildGameHtml(playSceneBody, spec, description, meta) {
-  const rawTitle = (spec?.title || description.slice(0, 60)).trim();
+  const rawTitle = (spec?.title || safeTruncate(cleanRawDescription(description), 60)).trim();
   const safeTitle = rawTitle.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/'/g, "\\'").replace(/"/g, '&quot;');
   const title = rawTitle;
-  const desc = spec?.core_loop || description.slice(0, 200);
+  const desc = spec?.core_loop || safeTruncate(cleanRawDescription(description), 200);
   return `<!DOCTYPE html>
 <html lang="ru"><head>
 <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
@@ -1046,6 +1058,16 @@ function detectParticleStopOnCount(body) {
   return errs;
 }
 
+// Тайтл/меню содержит сырой description (не обработан SPEC-этапом) — SPEC не вернул spec.title
+function detectRawDescriptionTitle(html, description) {
+  const d = cleanRawDescription(description);
+  if (!d) return [];
+  if (html.includes(d.slice(0, 30))) {
+    return ['Тайтл/меню содержит сырой description юзера — SPEC-этап не вернул spec.title, игра выглядит как брак'];
+  }
+  return [];
+}
+
 // Метод, вызываемый из create(), читает this.<поле>, которое инициализируется ПОЗЖЕ в create()
 // (напр. частицы читают this.player.x до создания player) → TypeError: Cannot read properties
 // of undefined (reading 'x'). Учитываем порядок вызовов и транзитивно созданные поля.
@@ -1405,7 +1427,7 @@ function parseSeo(html, fallbackDesc) {
   const kwMatch = html.match(/<meta\s+name=["']keywords["']\s+content=["'](.*?)["']/i);
   return {
     title: titleMatch ? titleMatch[1].trim().replace(/<[^>]*>/g, '') : 'AI Game',
-    description: descMatch ? descMatch[1].trim() : (fallbackDesc || '').slice(0, 200),
+    description: descMatch ? descMatch[1].trim() : safeTruncate(fallbackDesc, 200),
     keywords: kwMatch ? kwMatch[1].trim() : 'игра, онлайн, ai, phaser',
   };
 }
@@ -1541,8 +1563,9 @@ async function generateNew(description, textures, baseCode, meta) {
       const doubleJumpErrs = detectDoubleJumpNoGrounded(body);
       const particleStopErrs = detectParticleStopOnCount(body);
       const createOrderErrs = detectCreateOrderDeps(body);
+      const rawTitleErrs = detectRawDescriptionTitle(html, description);
       const specMisses = checkSpecCoverage(html, spec);
-      const allErrs = [...errs, ...unknownMethods, ...fixedApiErrs, ...colorErrs, ...earlyFollowErrs, ...colliderErrs, ...windowClassErrs, ...doublePhysErrs, ...undefHpErrs, ...seedOverErrs, ...missingNewErrs, ...registryErrs, ...fallbackErrs, ...overlayErrs, ...missingCbErrs, ...uncalledErrs, ...dynTexErrs, ...fillColorErrs, ...postFXErrs, ...noGroundErrs, ...hitNoInvincibleErrs, ...spawnOobErrs, ...untrackedTimerErrs, ...countActiveErrs, ...speedUncappedErrs, ...doubleJumpErrs, ...particleStopErrs, ...createOrderErrs];
+      const allErrs = [...errs, ...unknownMethods, ...fixedApiErrs, ...colorErrs, ...earlyFollowErrs, ...colliderErrs, ...windowClassErrs, ...doublePhysErrs, ...undefHpErrs, ...seedOverErrs, ...missingNewErrs, ...registryErrs, ...fallbackErrs, ...overlayErrs, ...missingCbErrs, ...uncalledErrs, ...dynTexErrs, ...fillColorErrs, ...postFXErrs, ...noGroundErrs, ...hitNoInvincibleErrs, ...spawnOobErrs, ...untrackedTimerErrs, ...countActiveErrs, ...speedUncappedErrs, ...doubleJumpErrs, ...particleStopErrs, ...createOrderErrs, ...rawTitleErrs];
       return { html, body, errs: allErrs, specMisses, score: candidateScore({ html, errs: allErrs, specMisses }) };
     }).filter(Boolean);
 
