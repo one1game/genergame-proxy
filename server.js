@@ -95,7 +95,7 @@ const PLAY_SCENE_PROMPT = `Ты — senior Phaser.js 3.87 разработчик
 - Готовые эффекты (Juice SDK) — НЕ пиши партиклы/тряску/попапы руками, вызывай: Juice.shake(this, intensity), Juice.burst(this, x, y, color, n), Juice.popText(this, x, y, text, color), Juice.comboFlash(this, x, y, mult). Это фирменный стиль игры. ВАЖНО: Juice.shake(this, intensity) — intensity в диапазоне 0.005–0.05 (доля экрана), НЕ пиксели: сильный удар 0.04–0.05, обычный 0.015–0.025, лёгкий 0.005–0.01. Никогда не передавай 5–20.
 - Музыка: this.music = new Music(); this.music.start() — генеративный саундтрек уже готов; this.music.setTempo(bpm) — ускоряй темп по difficulty_curve (например 96 + level*12). Никогда не создавай второй экземпляр Music.
 - Фирменный визуал: в самом начале create() вызови applyPostFX(this.cameras.main) — bloom+vignette (функция уже в каркасе). ЗАПРЕЩЕНО звать её и любые методы сцены (this.events.on, this.cameras, this.input и т.п.) в constructor() — они существуют только после boot сцены, в конструкторе это краш "undefined.on".
-- Уровень: генерируй мир через this.rng (this.rng.between(a,b), this.rng.pick(arr), this.rng.frac()) и this.seed — НЕ через Math.random. Покажи this.seed в HUD как '#seed' — у каждого юзера свой воспроизводимый уровень.
+- Уровень: генерируй мир через this.rng (this.rng.between(a,b), this.rng.pick(arr), this.rng.frac()) и this.seed — НЕ через Math.random. Покажи this.seed в HUD как '#seed' — у каждого юзера свой воспроизводимый уровень. ВАЖНО: генератор — ТОЛЬКО new Phaser.Math.RandomDataGenerator(String(seed)), как в скелетоне; Phaser.Math.RNG не существует, и this.rng без 'new' — краш. this.rng/this.seed уже инициализированы в constructor() — НЕ пересоздавай их, только this.rng.init(this.seed) при смене уровня.
 - Существа: makeCreature(this, 'key', seed, [c1,c2,c3]) — создаёт процедурный спрайт из примитивов (мягкий блоб, не квадрат) для игрока/врагов; палитру бери из art_style.palette. ВАЖНО: makeCreature() возвращает ГОТОВЫЙ Arcade-спрайт (this.physics.add.sprite) с телом физики — присваивай результат (const s = makeCreature(...)), ставь позицию (s.setPosition(x,y)) и настраивай тело (s.body.setCollideWorldBounds(true) и т.п.). НИКОГДА не зови this.physics.add.existing(s) на объекты из makeCreature — повторная регистрация пересоздаёт body (неопределённое поведение). physics.add.existing — только для объектов БЕЗ физики (this.add.rectangle, this.add.image и т.п.).
 - Цвета — ТОЛЬКО числа вида 0xRRGGBB (например 0x4a90d9), НИКОГДА строки '#RRGGBB' — setTint/fillStyle/particle tint в Phaser ждут число, строки дают чёрный/непредсказуемый цвет.
 - НИКОГДА не читай Juice, Music, SFX или сцены (BootScene/MenuScene/PlayScene/GameOverScene) через window.ИмяКласса — в classic-script top-level class/const/let НЕ становятся свойствами window (window.Juice === undefined). Используй класс напрямую по имени: Juice.shake(this, ...), new SFX(), new Music().
@@ -718,6 +718,24 @@ function detectSeedOverride(body) {
   return [];
 }
 
+// this.xxx = Phaser.Y.Z; — класс/неймспейс присвоен как значение, а не инстанцирован.
+// Без 'new' this.xxx === класс, методы undefined → "Cannot read properties of undefined".
+// Тот же класс "объект-как-значение", что window.Juice, только источник — сам Phaser API.
+// Отдельно: Phaser.Math.RNG не существует в Phaser 3.87 — генератор называется RandomDataGenerator.
+function detectMissingNew(body) {
+  if (!body) return [];
+  const masked = maskNonCode(body);
+  const errs = [];
+  for (const m of masked.matchAll(/this\.(\w+)\s*=\s*(Phaser\.[\w.]+)\s*;/g)) {
+    if (/\bPhaser\.Math\.RNG\b/.test(m[2])) {
+      errs.push(`this.${m[1]} = ${m[2]} — класса Phaser.Math.RNG НЕ существует в Phaser 3.87, и без 'new' это присвоение класса, а не экземпляра (this.${m[1]}.init === undefined → краш). Используй new Phaser.Math.RandomDataGenerator(String(seed)) как в скелетоне.`);
+    } else {
+      errs.push(`this.${m[1]} = ${m[2]} — присвоен класс/неймспейс, а не экземпляр. Похоже на пропущенный 'new': this.${m[1]} = new ${m[2]}(...).`);
+    }
+  }
+  return errs;
+}
+
 // GameOverScene читает registry.get('score'), но никто не пишет registry.set('score') → счёт всегда 0.
 function detectRegistryScore(body) {
   if (!body) return [];
@@ -1135,7 +1153,7 @@ async function reviewAndFix(html, description) {
       { role: 'user', content: `Игра по запросу: ${description}\n\nHTML-код игры:\n${html}` },
     ], { temperature: 0.3, max_tokens: 8192 });
     const fixed = ensureCdn(cleanHtml(raw));
-    const errs = qaHtml(fixed).concat(detectFixedApiCalls(fixed), detectColorStrings(fixed), detectEarlyCameraFollow(fixed), detectCollidersInUpdate(fixed), detectWindowClassAccess(fixed), detectDoublePhysicsAdd(fixed), detectUndefinedHp(fixed), detectSeedOverride(fixed), detectRegistryScore(fixed), detectDeadFallback(fixed), detectDarkOverlayRect(fixed), detectMissingEventCallback(fixed));
+    const errs = qaHtml(fixed).concat(detectFixedApiCalls(fixed), detectColorStrings(fixed), detectEarlyCameraFollow(fixed), detectCollidersInUpdate(fixed), detectWindowClassAccess(fixed), detectDoublePhysicsAdd(fixed), detectUndefinedHp(fixed), detectSeedOverride(fixed), detectMissingNew(fixed), detectRegistryScore(fixed), detectDeadFallback(fixed), detectDarkOverlayRect(fixed), detectMissingEventCallback(fixed));
     if (errs.length) return null;
     return fixed;
   } catch {
@@ -1198,12 +1216,13 @@ async function generateNew(description, textures, baseCode, meta) {
       const doublePhysErrs = detectDoublePhysicsAdd(body);
       const undefHpErrs = detectUndefinedHp(body);
       const seedOverErrs = detectSeedOverride(body);
+      const missingNewErrs = detectMissingNew(body);
       const registryErrs = detectRegistryScore(body);
       const fallbackErrs = detectDeadFallback(body);
       const overlayErrs = detectDarkOverlayRect(body);
       const missingCbErrs = detectMissingEventCallback(body);
       const specMisses = checkSpecCoverage(html, spec);
-      const allErrs = [...errs, ...unknownMethods, ...fixedApiErrs, ...colorErrs, ...earlyFollowErrs, ...colliderErrs, ...windowClassErrs, ...doublePhysErrs, ...undefHpErrs, ...seedOverErrs, ...registryErrs, ...fallbackErrs, ...overlayErrs, ...missingCbErrs];
+      const allErrs = [...errs, ...unknownMethods, ...fixedApiErrs, ...colorErrs, ...earlyFollowErrs, ...colliderErrs, ...windowClassErrs, ...doublePhysErrs, ...undefHpErrs, ...seedOverErrs, ...missingNewErrs, ...registryErrs, ...fallbackErrs, ...overlayErrs, ...missingCbErrs];
       return { html, body, errs: allErrs, specMisses, score: candidateScore({ html, errs: allErrs, specMisses }) };
     }).filter(Boolean);
 

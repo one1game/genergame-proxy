@@ -85,12 +85,16 @@ await sb.from('games').update({
   ...(ok ? { error_message: null } : { error_message: String(errs.join('; ') || canvas.reason).slice(0, 500) }),
 }).eq('id', GAME_ID).then(({ error: ue }) => { if (ue) console.error('supabase update:', ue.message); });
 
-// Успех → уведомляем бота, он пришлёт юзеру ссылку
-if (ok && game.chat_id && game.slug && game.title) {
+// Итог → всегда уведомляем бота: ready → ссылка, failed → сообщение об ошибке.
+// Без этого юзер при failed получает тишину, хотя игра уже не в generating.
+if (game.chat_id && game.slug) {
+  const body = ok
+    ? { slug: game.slug, chatId: game.chat_id, title: game.title, gameId: GAME_ID, status: 'ready' }
+    : { slug: game.slug, chatId: game.chat_id, gameId: GAME_ID, status: 'failed', error: String(errs.join('; ') || canvas.reason).slice(0, 200) };
   await fetch(`${PORTAL_URL}/callback`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ slug: game.slug, chatId: game.chat_id, title: game.title, gameId: GAME_ID }),
+    body: JSON.stringify(body),
   }).then(r => console.log('callback:', r.status)).catch(e => console.error('callback:', e.message));
 }
 
