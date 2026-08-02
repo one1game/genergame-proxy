@@ -1117,7 +1117,7 @@ async function callDeepSeek(messages, opts = {}) {
       model: DS_MODEL,
       messages,
       temperature: opts.temperature ?? 0.8,
-      max_tokens: opts.max_tokens ?? 8192,
+      max_tokens: opts.max_tokens ?? 16384,
     }),
     signal: controller.signal,
   }).finally(() => clearTimeout(timeout));
@@ -1152,7 +1152,7 @@ async function reviewAndFix(html, description) {
     const raw = await callDeepSeek([
       { role: 'system', content: REVIEW_PROMPT },
       { role: 'user', content: `Игра по запросу: ${description}\n\nHTML-код игры:\n${html}` },
-    ], { temperature: 0.3, max_tokens: 8192 });
+    ], { temperature: 0.3, max_tokens: 16384 });
     const fixed = ensureCdn(cleanHtml(raw));
     const errs = qaHtml(fixed).concat(detectFixedApiCalls(fixed), detectColorStrings(fixed), detectEarlyCameraFollow(fixed), detectCollidersInUpdate(fixed), detectWindowClassAccess(fixed), detectDoublePhysicsAdd(fixed), detectUndefinedHp(fixed), detectSeedOverride(fixed), detectMissingNew(fixed), detectRegistryScore(fixed), detectDeadFallback(fixed), detectDarkOverlayRect(fixed), detectMissingEventCallback(fixed));
     if (errs.length) return null;
@@ -1168,7 +1168,7 @@ async function polishPass(html, description) {
     const raw = await callDeepSeek([
       { role: 'system', content: POLISH_PROMPT },
       { role: 'user', content: `Игра по запросу: ${description}\n\nHTML-код игры:\n${html}` },
-    ], { temperature: 0.3, max_tokens: 8192 });
+    ], { temperature: 0.3, max_tokens: 16384 });
     const polished = ensureCdn(cleanHtml(raw));
     const errs = qaHtml(polished).concat(detectFixedApiCalls(polished), detectColorStrings(polished), detectEarlyCameraFollow(polished), detectCollidersInUpdate(polished), detectWindowClassAccess(polished), detectDoublePhysicsAdd(polished), detectUndefinedHp(polished), detectSeedOverride(polished), detectRegistryScore(polished), detectDeadFallback(polished), detectDarkOverlayRect(polished), detectMissingEventCallback(polished));
     if (errs.length) return null; // полировка что-то сломала — откатываем
