@@ -1354,6 +1354,15 @@ const server = createServer({ requestTimeout: 0, headersTimeout: 0 }, async (req
     return;
   }
 
+  // Диагностика: отвечает через 360с (без DeepSeek) — проверка таймаута платформы
+  if (req.method === 'GET' && req.url === '/slowtest') {
+    setTimeout(() => {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ ok: true, slow: 360 }));
+    }, 360_000);
+    return;
+  }
+
   if (req.method !== 'POST') { res.writeHead(405); res.end('POST only'); return; }
 
   let body = '';
