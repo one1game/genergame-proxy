@@ -1445,6 +1445,8 @@ const server = createServer({ requestTimeout: 0, headersTimeout: 0 }, async (req
     console.error(`❌ job error: ${err.message}`);
     // Юзера уведомит вотчдог (cron): помечаем failed здесь же, чтобы не ждать 10 минут.
     updateGame(job.gameId, { status: 'failed', error_message: String(err.message).slice(0, 500) }).catch(() => {});
+    // + немедленный callback: вотчдог ждёт до 10 минут, а юзер не должен молчать всё это время
+    notifyUser(job, 'failed', err.message).catch(() => {});
   });
 });
 
@@ -1495,6 +1497,8 @@ async function runJob(job, startTime) {
         source_code: result.diagnosticHtml || null,
       });
     } catch (_) { /* не критично */ }
+    // Смоук НЕ запускался (нет html) → callback обязан уведомить юзера здесь, иначе тишина
+    notifyUser(job, 'failed', String(result.error || 'Generation failed')).catch(() => {});
     return;
   }
 
@@ -1524,6 +1528,20 @@ async function runJob(job, startTime) {
   }
 
   console.log(`✅ ${job.gameId} done in ${Date.now() - startTime}ms (smoke: ${smokeDispatched ? 'dispatched' : result.smoke})`);
+}
+
+// Единый путь уведомления юзера через /callback бота. Обязателен в ЛЮБОМ финале
+// (ready/failed/QA-отбраковка/исключение) — иначе юзер молчит, пока не увидит игру сам.
+async function notifyUser(job, status, error) {
+  if (!job?.slug || !job?.chatId) return;
+  const body = status === 'ready'
+    ? { slug: job.slug, chatId: job.chatId, title: job.title || '', gameId: job.gameId, status: 'ready' }
+    : { slug: job.slug, chatId: job.chatId, gameId: job.gameId, status: 'failed', error: String(error || 'unknown').slice(0, 200) };
+  await fetch(`${PORTAL_URL}/callback`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
 }
 
 const PORT = parseInt(process.env.PORT || '3000');
