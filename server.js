@@ -1056,6 +1056,24 @@ function ensureCdn(html) {
   return html;
 }
 
+// Шаг 2: клиентский предохранитель — при любом рантайм-краше вместо чёрного экрана
+// показываем экран ошибки с кнопкой «ЗАНОВО» (перехват window error).
+const CRASH_SCREEN_JS = `<script>
+window.addEventListener('error', function(e){
+  if (document.getElementById('crashScreen')) return;
+  var d = document.createElement('div');
+  d.id = 'crashScreen';
+  d.style.cssText = 'position:fixed;inset:0;background:#0a0a12;color:#fff;display:flex;flex-direction:column;align-items:center;justify-content:center;font-family:monospace;z-index:99999;text-align:center;padding:20px';
+  d.innerHTML = '<h2 style="color:#ff00ff">Игра споткнулась &#128295;</h2><p>Попробуй перезапустить</p><button onclick="location.reload()" style="margin-top:20px;padding:12px 24px;background:#6366f1;color:#fff;border:none;border-radius:8px;font-size:16px">ЗАНОВО</button>';
+  document.body.appendChild(d);
+});
+<\/script>`;
+
+function injectCrashScreen(html) {
+  if (!html || /crashScreen/.test(html)) return html;
+  return html.replace(/<\/body>/i, CRASH_SCREEN_JS + '\n</body>');
+}
+
 function parseSeo(html, fallbackDesc) {
   const titleMatch = html.match(/<title>(.*?)<\/title>/i);
   const descMatch = html.match(/<meta\s+name=["']description["']\s+content=["'](.*?)["']/i);
@@ -1252,7 +1270,7 @@ async function generateNew(description, textures, baseCode, meta) {
         };
       }
       return {
-        html: bestOverall.html,
+        html: injectCrashScreen(bestOverall.html),
         seo: parseSeo(bestOverall.html, description),
         attempts: MAX_ATTEMPTS,
         smoke: smokeStatus,
@@ -1282,7 +1300,7 @@ async function generateNew(description, textures, baseCode, meta) {
   const finalSmoke = await headlessSmoke(final);
   if (finalSmoke && finalSmoke !== 'SKIPPED' && finalSmoke.length) {
     return {
-      html: best,
+      html: injectCrashScreen(best),
       seo: parseSeo(best, description),
       attempts: MAX_ATTEMPTS,
       reviewed: false,
@@ -1292,7 +1310,7 @@ async function generateNew(description, textures, baseCode, meta) {
     };
   }
 
-  return { html: final, seo: parseSeo(final, description), attempts: MAX_ATTEMPTS, reviewed: !!reviewed, smoke: smokeStatus };
+  return { html: injectCrashScreen(final), seo: parseSeo(final, description), attempts: MAX_ATTEMPTS, reviewed: !!reviewed, smoke: smokeStatus };
 }
 
 // Legacy-путь: полный HTML (улучшение существующей игры по baseCode)
@@ -1336,6 +1354,27 @@ function getSb() {
 async function updateGame(gameId, data) {
   const { error } = await getSb().from('games').update(data).eq('id', gameId);
   if (error) throw new Error(`Supabase: ${error.message}`);
+}
+
+// Шаг 1: смоук перенесён на GitHub Actions (Chromium OOM-ит free-tier Render).
+// Дёргаем workflow_dispatch smoke.yml; результат применит сам Action (ready/failed).
+async function triggerActionsSmoke(gameId) {
+  const token = process.env.GITHUB_TOKEN;
+  if (!token) { console.log('smoke: GITHUB_TOKEN не задан — Actions-смоук пропущен, fallback ready'); return false; }
+  try {
+    const r = await fetch('https://api.github.com/repos/one1game/genergame-proxy/actions/workflows/smoke.yml/dispatches', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: 'application/vnd.github+json',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ ref: 'main', inputs: { game_id: gameId } }),
+    });
+    const ok = r.status === 204 || r.status === 201;
+    console.log(`smoke: Actions dispatch ${gameId} → ${r.status}${ok ? '' : ' ' + (await r.text().catch(() => ''))}`);
+    return ok;
+  } catch (e) { console.log('smoke: dispatch error: ' + e.message); return false; }
 }
 
 // --- Server ---
@@ -1424,16 +1463,21 @@ const server = createServer({ requestTimeout: 0, headersTimeout: 0 }, async (req
 
     // Save to Supabase (без искусственного обрезания source_code)
     const seo = result.seo;
+    // Шаг 1: смоук на GitHub Actions — игра остаётся generating, пока Action не поставит ready/failed.
+    // Если dispatch не удался (нет GITHUB_TOKEN/прав) — fallback: сразу ready как раньше.
+    const smokeDispatched = await triggerActionsSmoke(job.gameId);
     await updateGame(job.gameId, {
-      status: 'ready',
+      status: smokeDispatched ? 'generating' : 'ready',
       source_code: result.html,
       title: seo.title,
       description: seo.description,
       deploy_url: `${PORTAL_URL}/${job.slug}`,
+      ...(smokeDispatched && job.chatId ? { chat_id: job.chatId } : {}),
     });
 
-    // Notify CF Worker callback (он отправит уведомление в Telegram)
-    if (job.slug && job.chatId && seo.title) {
+    // Notify CF Worker callback (он отправит уведомление в Telegram) — только если смоук не в процессе:
+    // при dispatch callback выполнит сам GitHub Action после прохождения смоука.
+    if (!smokeDispatched && job.slug && job.chatId && seo.title) {
       const cbUrl = `${PORTAL_URL}/callback`;
       fetch(cbUrl, {
         method: 'POST',
@@ -1442,10 +1486,10 @@ const server = createServer({ requestTimeout: 0, headersTimeout: 0 }, async (req
       }).catch(() => {});
     }
 
-    console.log(`✅ ${job.gameId} done in ${Date.now() - startTime}ms`);
+    console.log(`✅ ${job.gameId} done in ${Date.now() - startTime}ms (smoke: ${smokeDispatched ? 'dispatched' : result.smoke})`);
 
     res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ ok: true, seo, smoke: result.smoke, attempts: result.attempts, error: result.error || null }));
+    res.end(JSON.stringify({ ok: true, seo, smoke: smokeDispatched ? 'dispatched' : result.smoke, attempts: result.attempts, error: result.error || null }));
   } catch (err) {
     console.error(`❌ job error: ${err.message}`);
     res.writeHead(500, { 'Content-Type': 'application/json' });

@@ -1,0 +1,26 @@
+name: Game Smoke Test
+on:
+  workflow_dispatch:
+    inputs:
+      game_id:
+        required: true
+        type: string
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Install deps
+        run: npm install puppeteer @supabase/supabase-js --no-fund --no-audit
+      - name: Run smoke against game from Supabase
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          PORTAL_URL: ${{ secrets.PORTAL_URL }}
+          GAME_ID: ${{ inputs.game_id }}
+        run: node gg-actions-smoke.mjs
