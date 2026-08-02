@@ -1400,102 +1400,112 @@ const server = createServer({ requestTimeout: 0, headersTimeout: 0 }, async (req
 
   const startTime = Date.now();
 
+  let job;
   try {
-    const job = JSON.parse(body);
+    job = JSON.parse(body);
+  } catch (err) {
+    res.writeHead(400, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: 'Invalid JSON: ' + err.message }));
+    return;
+  }
 
-    if (!job.gameId || !job.description || !job.chatId) {
-      res.writeHead(400, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ error: 'Missing required fields: gameId, description, chatId' }));
-      return;
-    }
+  if (!job.gameId || !job.description || !job.chatId) {
+    res.writeHead(400, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: 'Missing required fields: gameId, description, chatId' }));
+    return;
+  }
 
-    // Итеративное сотворчество: точечное улучшение по кнопке (патч-промпт поверх baseCode)
-    if (job.action) {
-      const ACTIONS = {
-        graphics: '🎨 Сделай графику заметно красивее и премиальнее: выразительные существа через makeCreature (мягкие блобы, не квадраты), больше Juice-эффектов (Juice.shake/Juice.burst/Juice.popText/Juice.comboFlash), фоновый декор/параллакс, свечение (postFX.addGlow), тщательнее палитра и композиция.',
-        difficulty: '⚔️ Сделай игру СЛОЖНЕЕ: более крутая difficulty_curve, больше врагов/препятствий, выше требования к победе, меньше таймера. Сохрани честный баланс — не делай невыполнимой.',
-        levels: '🗺️ Добавь минимум 5 уровней с прогрессией: перестройка уровня на каждом, прогресс-бар, надпись «УРОВЕНЬ N», рост сложности и новые вызовы между уровнями.',
-      };
-      const actionText = ACTIONS[job.action];
-      if (actionText) {
-        const result = await generate(`${actionText}\n(Игра: ${job.description})`, [], job.baseCode, { gameId: job.gameId, slug: job.slug });
-        if (result.html) {
-          const seo = result.seo;
-          await updateGame(job.gameId, {
-            status: 'ready',
-            source_code: result.html,
-            title: seo.title,
-            description: seo.description,
-            deploy_url: `${PORTAL_URL}/${job.slug}`,
-          });
-          if (job.slug && job.chatId && seo.title) {
-            fetch(`${PORTAL_URL}/callback`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ slug: job.slug, chatId: job.chatId, title: seo.title, gameId: job.gameId }),
-            }).catch(() => {});
-          }
-          console.log(`✅ ${job.gameId} improved (${job.action}) in ${Date.now() - startTime}ms`);
-          res.writeHead(200, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ ok: true, seo, smoke: result.smoke }));
-          return;
+  // Принято: отвечаем 202 МГНОВЕННО, генерация уходит в фон.
+  // Worker (ctx.waitUntil) больше не обязан ждать минуты генерации — ждёт только коннект,
+  // что убирает отмену waitUntil на free-тайере Cloudflare.
+  console.log(`📨 ${job.gameId} accepted (${job.action || 'generate'}) in ${Date.now() - startTime}ms`);
+  res.writeHead(202, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify({ ok: true, accepted: true, gameId: job.gameId }));
+
+  runJob(job, startTime).catch((err) => {
+    console.error(`❌ job error: ${err.message}`);
+    // Юзера уведомит вотчдог (cron): помечаем failed здесь же, чтобы не ждать 10 минут.
+    updateGame(job.gameId, { status: 'failed', error_message: String(err.message).slice(0, 500) }).catch(() => {});
+  });
+});
+
+// Фоновая генерация: вызывается ПОСЛЕ отправки 202, ошибки не всплывают в HTTP-ответ
+async function runJob(job, startTime) {
+  // Итеративное сотворчество: точечное улучшение по кнопке (патч-промпт поверх baseCode)
+  if (job.action) {
+    const ACTIONS = {
+      graphics: '🎨 Сделай графику заметно красивее и премиальнее: выразительные существа через makeCreature (мягкие блобы, не квадраты), больше Juice-эффектов (Juice.shake/Juice.burst/Juice.popText/Juice.comboFlash), фоновый декор/параллакс, свечение (postFX.addGlow), тщательнее палитра и композиция.',
+      difficulty: '⚔️ Сделай игру СЛОЖНЕЕ: более крутая difficulty_curve, больше врагов/препятствий, выше требования к победе, меньше таймера. Сохрани честный баланс — не делай невыполнимой.',
+      levels: '🗺️ Добавь минимум 5 уровней с прогрессией: перестройка уровня на каждом, прогресс-бар, надпись «УРОВЕНЬ N», рост сложности и новые вызовы между уровнями.',
+    };
+    const actionText = ACTIONS[job.action];
+    if (actionText) {
+      const result = await generate(`${actionText}\n(Игра: ${job.description})`, [], job.baseCode, { gameId: job.gameId, slug: job.slug });
+      if (result.html) {
+        const seo = result.seo;
+        await updateGame(job.gameId, {
+          status: 'ready',
+          source_code: result.html,
+          title: seo.title,
+          description: seo.description,
+          deploy_url: `${PORTAL_URL}/${job.slug}`,
+        });
+        if (job.slug && job.chatId && seo.title) {
+          fetch(`${PORTAL_URL}/callback`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ slug: job.slug, chatId: job.chatId, title: seo.title, gameId: job.gameId }),
+          }).catch(() => {});
         }
+        console.log(`✅ ${job.gameId} improved (${job.action}) in ${Date.now() - startTime}ms`);
+        return;
       }
     }
-
-    // Generate via DeepSeek
-    const result = await generate(job.description, job.textures || [], job.baseCode, { gameId: job.gameId, slug: job.slug });
-
-    if (!result.html) {
-      // Телеметрия: фиксируем фейл в БД, чтобы статистика ошибок была реальной (а не только в логах)
-      try {
-        await updateGame(job.gameId, {
-          status: 'failed',
-          error_message: String(result.error || 'Generation failed').slice(0, 500),
-          // Диагностика: сохраняем лучшую попытку даже при провале — по ней видно строку краша
-          source_code: result.diagnosticHtml || null,
-        });
-      } catch (_) { /* не критично для ответа */ }
-      res.writeHead(500, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ error: result.error || 'Generation failed' }));
-      return;
-    }
-
-    // Save to Supabase (без искусственного обрезания source_code)
-    const seo = result.seo;
-    // Шаг 1: смоук на GitHub Actions — игра остаётся generating, пока Action не поставит ready/failed.
-    // Если dispatch не удался (нет GITHUB_TOKEN/прав) — fallback: сразу ready как раньше.
-    const smokeDispatched = await triggerActionsSmoke(job.gameId);
-    await updateGame(job.gameId, {
-      status: smokeDispatched ? 'generating' : 'ready',
-      source_code: result.html,
-      title: seo.title,
-      description: seo.description,
-      deploy_url: `${PORTAL_URL}/${job.slug}`,
-      ...(smokeDispatched && job.chatId ? { chat_id: job.chatId } : {}),
-    });
-
-    // Notify CF Worker callback (он отправит уведомление в Telegram) — только если смоук не в процессе:
-    // при dispatch callback выполнит сам GitHub Action после прохождения смоука.
-    if (!smokeDispatched && job.slug && job.chatId && seo.title) {
-      const cbUrl = `${PORTAL_URL}/callback`;
-      fetch(cbUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ slug: job.slug, chatId: job.chatId, title: seo.title, gameId: job.gameId }),
-      }).catch(() => {});
-    }
-
-    console.log(`✅ ${job.gameId} done in ${Date.now() - startTime}ms (smoke: ${smokeDispatched ? 'dispatched' : result.smoke})`);
-
-    res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ ok: true, seo, smoke: smokeDispatched ? 'dispatched' : result.smoke, attempts: result.attempts, error: result.error || null }));
-  } catch (err) {
-    console.error(`❌ job error: ${err.message}`);
-    res.writeHead(500, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ error: err.message }));
   }
-});
+
+  // Generate via DeepSeek
+  const result = await generate(job.description, job.textures || [], job.baseCode, { gameId: job.gameId, slug: job.slug });
+
+  if (!result.html) {
+    // Телеметрия: фиксируем фейл в БД, чтобы статистика ошибок была реальной (а не только в логах)
+    try {
+      await updateGame(job.gameId, {
+        status: 'failed',
+        error_message: String(result.error || 'Generation failed').slice(0, 500),
+        // Диагностика: сохраняем лучшую попытку даже при провале — по ней видно строку краша
+        source_code: result.diagnosticHtml || null,
+      });
+    } catch (_) { /* не критично */ }
+    return;
+  }
+
+  // Save to Supabase (без искусственного обрезания source_code)
+  const seo = result.seo;
+  // Шаг 1: смоук на GitHub Actions — игра остаётся generating, пока Action не поставит ready/failed.
+  // Если dispatch не удался (нет GITHUB_TOKEN/прав) — fallback: сразу ready как раньше.
+  const smokeDispatched = await triggerActionsSmoke(job.gameId);
+  await updateGame(job.gameId, {
+    status: smokeDispatched ? 'generating' : 'ready',
+    source_code: result.html,
+    title: seo.title,
+    description: seo.description,
+    deploy_url: `${PORTAL_URL}/${job.slug}`,
+    ...(smokeDispatched && job.chatId ? { chat_id: job.chatId } : {}),
+  });
+
+  // Notify CF Worker callback (он отправит уведомление в Telegram) — только если смоук не в процессе:
+  // при dispatch callback выполнит сам GitHub Action после прохождения смоука.
+  if (!smokeDispatched && job.slug && job.chatId && seo.title) {
+    const cbUrl = `${PORTAL_URL}/callback`;
+    fetch(cbUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ slug: job.slug, chatId: job.chatId, title: seo.title, gameId: job.gameId }),
+    }).catch(() => {});
+  }
+
+  console.log(`✅ ${job.gameId} done in ${Date.now() - startTime}ms (smoke: ${smokeDispatched ? 'dispatched' : result.smoke})`);
+}
 
 const PORT = parseInt(process.env.PORT || '3000');
 server.listen(PORT, () => console.log(`Genergame proxy on :${PORT}`));
