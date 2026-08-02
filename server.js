@@ -171,6 +171,7 @@ const PLAY_SCENE_PROMPT = `Ты — senior Phaser.js 3.87 разработчик
    - localStorage — ТОЛЬКО в try/catch (браузер может блокировать);
    - если entity сложная (дрон/турель с логикой) — вынеси её в класс, наследуемый от Phaser.Physics.Arcade.Sprite, и добавь туда методы (update/shoot/onHit);
    - используй delta из update(time, delta) для всех ручных таймеров/движений.
+14. НЕ ОБРЕЗАЙ ОТВЕТ (критично): метод update() обязателен, и каждый this.X(), который ты вызываешь в create()/update()/addEvent, ОБЯЗАН иметь полное определение в конце класса. Если код не влезает — сокращай тело методов, но не оставляй вызовы без определений: игра упадёт с "this.spawnWave is not a function" и пойдёт в мусор. Обрезанный класс без update() = брак.
 
 ЧЕК-ЛИСТ ПЕРЕД ОТВЕТОМ: win/lose проверяются? juice реально в коде? звуки вызываются? нет запрещённых методов?
 ГЛАВНОЕ: игрок должен СТОЯТЬ на платформах/земле и МОЧЬ прыгать — не отключай body.checkCollision.down без причины, иначе игра неиграбельна (проваливание + мёртвый прыжок). Все текстуры, используемые в create() и в this.add.particles, должны быть созданы ДО их первого использования (this.make.graphics + generateTexture раньше, чем add.sprite/image/particles).
@@ -845,6 +846,11 @@ function detectUndefinedMethods(body) {
   for (const m of body.matchAll(/this\.([A-Za-z_$][\w$]*)\s*\(/g)) {
     const name = m[1];
     if (!methods.has(name) && !entities.has(name) && !groups.has(name)) unknown.add(name);
+  }
+  // Нет update() = ответ обрезан/недописан (Phaser.Scene требует update). Это главный маркер обрыва,
+  // когда модель не дописала конец класса — тогда методы из create() валятся с "is not a function".
+  if (!methods.has('update')) {
+    unknown.add('Класс PlayScene без метода update() — твой ответ ОБРЕЗАН/недописан. Допиши update() и все методы, вызываемые из create()/addEvent (spawnWave, spawnArtifacts и т.п.) ПОЛНОСТЬЮ — ни один this.X() не должен остаться без определения.');
   }
   return [...unknown];
 }
@@ -1540,7 +1546,9 @@ async function generateNew(description, textures, baseCode, meta) {
         const html = buildGameHtml(body, spec, description, meta);
       const errs = qaHtml(html);
       const unknownMethods = detectUndefinedMethods(body)
-        .map(n => `Метод this.${n}() вызывается, но не определён в классе PlayScene — добавь его реализацию (или удали вызов)`);
+        .map(n => n.startsWith('Класс')
+          ? n
+          : `Метод this.${n}() вызывается, но не определён — твой ответ НЕДОПИСАН/обрезан. ДОПИШИ этот метод в класс PlayScene ПОЛНОСТЬЮ (с телом), не оставляй заглушки. Проверь: все this.X() в create()/update() обязаны иметь определение.`);
       const fixedApiErrs = detectFixedApiCalls(body);
       const colorErrs = detectColorStrings(body);
       const earlyFollowErrs = detectEarlyCameraFollow(body);
