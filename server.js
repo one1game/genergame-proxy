@@ -1339,7 +1339,8 @@ async function updateGame(gameId, data) {
 }
 
 // --- Server ---
-const server = createServer(async (req, res) => {
+// requestTimeout/headersTimeout: 0 — генерация идёт до ~10 мин, дефолтные 300с сервера режут коннект на 303с
+const server = createServer({ requestTimeout: 0, headersTimeout: 0 }, async (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
