@@ -124,6 +124,7 @@ const PLAY_SCENE_PROMPT = `Ты — senior Phaser.js 3.87 разработчик
 - Однотипные циклы движения групп — одним методом: moveObjects(group, delta) { group.children.iterate(o => { if (o.active) o.x -= this.gameSpeed * delta / 1000; }); } — не дублируй iterate для каждой группы.
 - this.make.graphics().generateTexture(key, w, h) — с гардом: if (!this.textures.exists(key)) { ... } — не пересоздавай текстуру при каждом запуске сцены.
 - Мёртвые константы запрещены: this.X = значение, которое нигде не читается/не меняется (this.CRYSTAL_VALUE = 1, this.MAX_LIVES = 3 без использования) — объявляй только то, что реально используется.
+- ПОРЯДОК В create() — сначала объекты, потом ссылки: создавай this.player, this.ground, группы и текстуры В ПЕРВУЮ ОЧЕРЕДЬ, и только ПОСЛЕ них вызывай методы, которые их читают (частицы со startFollow, камера startFollow). НИКОГДА не читай this.player.x / this.player.y / this.player.body и любые this.<поле> внутри метода, вызываемого из create() до того, как это поле создано — это TypeError: Cannot read properties of undefined (reading 'x').
 ЗАПРЕЩЕНО ОБЪЯВЛЯТЬ: class Music, class Juice, class SFX — эти классы уже определены в каркасе ГЛОБАЛЬНО. Используй this.music / this.sfx / Juice.* как есть, не дублируй их объявления (иначе SyntaxError: Identifier already declared).
 
 ОБЯЗАТЕЛЬНО:
@@ -844,10 +845,13 @@ function lineOf(text, idx) {
 function detectUncalledMethods(body) {
   if (!body) return [];
   const lifecycle = new Set(['constructor', 'create', 'update', 'preload', 'shutdown', 'destroy', 'init', 'render', 'resize']);
+  // Контрольные конструкции (switch/if/for/...) не являются методами — их сигнатуры
+  // ловятся этим же regex на уровне отступа и давали ложные срабатывания
+  const ctrl = new Set(['if', 'for', 'while', 'switch', 'do', 'else', 'try', 'catch', 'finally', 'return', 'each', 'function']);
   const errs = [];
   for (const m of body.matchAll(/^\s*([A-Za-z_$][\w$]*)\s*\([^)]*\)\s*\{/gm)) {
     const name = m[1];
-    if (lifecycle.has(name)) continue;
+    if (lifecycle.has(name) || ctrl.has(name)) continue;
     const rest = body.slice(0, m.index) + ' ' + body.slice(m.index + m[0].length);
     const used = new RegExp('this\\.' + name + '\\b').test(rest) || new RegExp('\\b' + name + '\\s*\\(').test(body.slice(0, m.index) + ' ' + body.slice(m.index + m[0].length));
     if (!used) errs.push(`Строка ${lineOf(body, m.index)}: метод ${name}() определён, но нигде не вызывается — привяжи его к клавише/кнопке/событию или удали. Мёртвый метод = неработающая механика (пример: playerShoot() есть, а стрельбы нет)`);
@@ -1036,6 +1040,79 @@ function detectParticleStopOnCount(body) {
     if (!seg.includes('emitParticleCount') || !seg.includes('.stop()')) continue;
     const m = seg.match(/emitParticleCount/);
     errs.push(`Строка ${lineOf(body, defs[i].index + m.index)}: частицы останавливаются НАВСЕГДА по лимиту emitParticleCount (X.stop() в методе) — шлейф/фон умрёт до конца игры. Не стопай: уменьши частоту эмиссии (frequency) или добавь deathZone/emitZone для автоматической очистки`);
+  }
+  return errs;
+}
+
+// Метод, вызываемый из create(), читает this.<поле>, которое инициализируется ПОЗЖЕ в create()
+// (напр. частицы читают this.player.x до создания player) → TypeError: Cannot read properties
+// of undefined (reading 'x'). Учитываем порядок вызовов и транзитивно созданные поля.
+function detectCreateOrderDeps(body) {
+  if (!body) return [];
+  const defs = methodDefs(body);
+  const methods = new Map();
+  for (let i = 0; i < defs.length; i++) {
+    const start = defs[i].index;
+    const end = i + 1 < defs.length ? defs[i + 1].index : body.length;
+    methods.set(defs[i][1], { start, end, seg: body.slice(start, end) });
+  }
+  const create = methods.get('create');
+  if (!create) return [];
+  const createSeg = create.seg;
+  // Инфраструктурные this.-поля, готовые всегда (не зависят от порядка в create)
+  const infra = new Set(['time', 'physics', 'add', 'cameras', 'input', 'registry', 'tweens', 'scene', 'textures', 'rng', 'seed', 'sfx', 'music', 'sys', 'load', 'cache', 'data', 'sound', 'game', 'anims', 'matter', 'children', 'events', 'tilemap', 'context', 'scale']);
+  // Имена, присваиваемые в create(): имя → АБСОЛЮТНАЯ позиция присваивания в body
+  const assignedInCreate = new Map();
+  for (const m of createSeg.matchAll(/this\.([A-Za-z_$][\w$]*)\s*=\s*/g)) assignedInCreate.set(m[1], create.start + m.index);
+  // Что создаёт каждый метод (this.X =) и что читает (this.X. — использование, не присваивание)
+  const createsOf = (name) => {
+    const mm = methods.get(name);
+    if (!mm) return new Set();
+    return new Set([...mm.seg.matchAll(/this\.([A-Za-z_$][\w$]*)\s*=\s*/g)].map(m => m[1]));
+  };
+  const readsOf = (name) => {
+    const mm = methods.get(name);
+    if (!mm) return new Set();
+    const res = new Set();
+    for (const m of mm.seg.matchAll(/this\.([A-Za-z_$][\w$]*)\s*(?:\.|\b)/g)) {
+      const n = m[1];
+      if (infra.has(n)) continue;
+      if (new RegExp('this\\.' + n + '\\s*=').test(mm.seg)) continue; // метод сам создаёт
+      res.add(n);
+    }
+    return res;
+  };
+  // Вызовы методов из create() с позициями (включая вложенные хелперы)
+  const callStack = [];
+  const walk = (name, callPos) => {
+    callStack.push({ name, pos: callPos });
+    const mm = methods.get(name);
+    if (!mm) return;
+    for (const m of mm.seg.matchAll(/this\.([A-Za-z_$][\w$]*)\s*\(/g)) {
+      if (methods.has(m[1]) && m[1] !== name) walk(m[1], mm.start + m.index);
+    }
+  };
+  walk('create', create.start);
+  // Для каждого вызова: поля, доступные на этот момент
+  const errs = [];
+  for (let i = 0; i < callStack.length; i++) {
+    const { name, pos } = callStack[i];
+    if (name === 'create') continue;
+    const knownBefore = new Set(infra);
+    for (const [k, p] of assignedInCreate) if (p <= pos) knownBefore.add(k);
+    // Поля, созданные в вызванных ранее хелперах (сам create исключаем — его поля
+    // с точными позициями уже в assignedInCreate, иначе все присваивания create
+    // попали бы в knownBefore независимо от порядка)
+    for (let j = 0; j < i; j++) {
+      if (callStack[j].name === 'create') continue;
+      for (const k of createsOf(callStack[j].name)) knownBefore.add(k);
+    }
+    for (const y of readsOf(name)) {
+      if (knownBefore.has(y)) continue;
+      if (!assignedInCreate.has(y) && ![...methods.keys()].some(mn => createsOf(mn).has(y))) continue; // поле вообще не создаётся в create — не наша забота
+      const m = methods.get(name).seg.match(new RegExp('this\\.' + y + '\\s*\\.'));
+      errs.push(`Строка ${lineOf(body, methods.get(name).start + m.index)}: ${name}() вызывается из create() и читает this.${y} ДО его инициализации — объект ещё undefined → TypeError (Cannot read properties of undefined). В create() соблюдай порядок: сначала создавай игрока/землю/группы, и ТОЛЬКО ПОТОМ вызывай методы, которые на них ссылаются (частицы со startFollow, камера и т.п.). Либо передавай ссылку аргументом: createEnvironmentParticles(player)`);
+    }
   }
   return errs;
 }
@@ -1461,8 +1538,9 @@ async function generateNew(description, textures, baseCode, meta) {
       const speedUncappedErrs = detectSpeedUncapped(body);
       const doubleJumpErrs = detectDoubleJumpNoGrounded(body);
       const particleStopErrs = detectParticleStopOnCount(body);
+      const createOrderErrs = detectCreateOrderDeps(body);
       const specMisses = checkSpecCoverage(html, spec);
-      const allErrs = [...errs, ...unknownMethods, ...fixedApiErrs, ...colorErrs, ...earlyFollowErrs, ...colliderErrs, ...windowClassErrs, ...doublePhysErrs, ...undefHpErrs, ...seedOverErrs, ...missingNewErrs, ...registryErrs, ...fallbackErrs, ...overlayErrs, ...missingCbErrs, ...uncalledErrs, ...dynTexErrs, ...fillColorErrs, ...postFXErrs, ...noGroundErrs, ...hitNoInvincibleErrs, ...spawnOobErrs, ...untrackedTimerErrs, ...countActiveErrs, ...speedUncappedErrs, ...doubleJumpErrs, ...particleStopErrs];
+      const allErrs = [...errs, ...unknownMethods, ...fixedApiErrs, ...colorErrs, ...earlyFollowErrs, ...colliderErrs, ...windowClassErrs, ...doublePhysErrs, ...undefHpErrs, ...seedOverErrs, ...missingNewErrs, ...registryErrs, ...fallbackErrs, ...overlayErrs, ...missingCbErrs, ...uncalledErrs, ...dynTexErrs, ...fillColorErrs, ...postFXErrs, ...noGroundErrs, ...hitNoInvincibleErrs, ...spawnOobErrs, ...untrackedTimerErrs, ...countActiveErrs, ...speedUncappedErrs, ...doubleJumpErrs, ...particleStopErrs, ...createOrderErrs];
       return { html, body, errs: allErrs, specMisses, score: candidateScore({ html, errs: allErrs, specMisses }) };
     }).filter(Boolean);
 
