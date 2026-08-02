@@ -111,6 +111,19 @@ const PLAY_SCENE_PROMPT = `Ты — senior Phaser.js 3.87 разработчик
 - цвет полосок/фигур менять ТОЛЬКО через .setFillStyle(0xRRGGBB); прямое присвоение .fillColor = НЕ работает в Phaser 3 (визуал не обновится);
 - каждый объявленный метод ОБЯЗАН вызываться (из update()/обработчика клавиши/кнопки) — метод, который нигде не вызывается, это мёртвая механика (например playerShoot() без вызова = нет стрельбы);
 - postFX.addGlow() (и любые postFX-фичи) ОБЯЗАТЕЛЬНО оборачивать: try { this.player.postFX.addGlow(...) } catch (e) {} — на устройствах без WebGL-пайплайнов голый вызов бросает исключение и даёт белый экран.
+- НЕ наноси урон в overlap-коллбеке без защиты: либо уничтожай объект сразу (hazard.destroy()), либо ставь invincible-защёлку (this.invincible = true; this.time.delayedCall(500, () => this.invincible = false)) с проверкой if (this.invincible) return; — overlap срабатывает каждый кадр пересечения, иначе урон 60 раз/сек.
+- Земля/платформы — ВСЕГДА физические: this.physics.add.staticGroup() + .create(...).setScale(w,h).refreshBody() + this.physics.add.collider(this.player, this.ground). Декоративный спрайт земли (add.image/tileSprite) = игрок проваливается сквозь неё.
+- Спавн предметов/врагов справа от игрока — ОБЯЗАТЕЛЬНО ограничивай по ширине мира: const x = Math.min(this.player.x + N + this.rng.between(...), WORLD_WIDTH - 200); — иначе у края карты всё спавнится за границей и недостижимо.
+- this.time.delayedCall, меняющий состояние (setSize, флаги), в методе, вызываемом из update() — сохраняй таймер в this.<имя>Timer и отменяй старый: if (this.slideTimer) this.time.removeEvent(this.slideTimer); this.slideTimer = this.time.delayedCall(...). Иначе при зажатой клавише десятки параллельных таймеров.
+- group.countActive() — ТОЛЬКО с аргументом countActive(true); без аргумента считает и уничтоженные объекты.
+- Рост скорости — ВСЕГДА с пределом: this.gameSpeed = Math.min(this.gameSpeed * rate, MAX_SPEED); никогда голое *= без cap.
+- Двойной прыжок — через флаг isGrounded, устанавливаемый коллбеком коллизии: this.physics.add.collider(this.player, this.ground, () => { this.isGrounded = true; }); сброс при взлёте. НЕ через body.blocked.down — на краю платформы он врёт.
+- Частицы: НИКОГДА this.XParticles.stop() по лимиту emitParticleCount (остановятся навсегда) — уменьшай frequency или добавь deathZone/emitZone.
+- При получении урона — визуальный фидбек: мигание this.tweens.add({targets: this.player, alpha: 0, duration: 100, yoyo: true, repeat: 5}).
+- В shutdown() сбрасывай все мобильные флаги: this.mobileControls.left.isDown = false; ... = false — иначе после смерти кнопка остаётся зажатой в новой игре.
+- Однотипные циклы движения групп — одним методом: moveObjects(group, delta) { group.children.iterate(o => { if (o.active) o.x -= this.gameSpeed * delta / 1000; }); } — не дублируй iterate для каждой группы.
+- this.make.graphics().generateTexture(key, w, h) — с гардом: if (!this.textures.exists(key)) { ... } — не пересоздавай текстуру при каждом запуске сцены.
+- Мёртвые константы запрещены: this.X = значение, которое нигде не читается/не меняется (this.CRYSTAL_VALUE = 1, this.MAX_LIVES = 3 без использования) — объявляй только то, что реально используется.
 ЗАПРЕЩЕНО ОБЪЯВЛЯТЬ: class Music, class Juice, class SFX — эти классы уже определены в каркасе ГЛОБАЛЬНО. Используй this.music / this.sfx / Juice.* как есть, не дублируй их объявления (иначе SyntaxError: Identifier already declared).
 
 ОБЯЗАТЕЛЬНО:
@@ -869,7 +882,7 @@ function detectFillColorAssign(body) {
 // (WebGL-пайплайны не инициализированы) → белый экран. Должен быть обёрнут.
 function detectPostFXUnwrapped(body) {
   if (!body) return [];
-  const defs = [...body.matchAll(/^\s*([A-Za-z_$][\w$]*)\s*\([^)]*\)\s*\{/gm)];
+  const defs = methodDefs(body);
   const errs = [];
   for (let i = 0; i < defs.length; i++) {
     const start = defs[i].index;
@@ -881,6 +894,157 @@ function detectPostFXUnwrapped(body) {
     }
   }
   return errs;
+}
+
+// Игрок ограничен только границами мира, но НЕТ ни одной физической коллизии с ним —
+// земля/платформы декоративные (обычные спрайты) → игрок проваливается сквозь них.
+function detectNoGroundCollision(body) {
+  if (!body) return [];
+  const errs = [];
+  const m = body.match(/this\.player\s*\.\s*setCollideWorldBounds\s*\(true\)/);
+  if (m && !/collider\s*\(\s*this\.player\b/.test(body)) {
+    errs.push(`Строка ${lineOf(body, m.index)}: игрок ограничен только границами мира (setCollideWorldBounds), но НЕТ ни одного physics.add.collider(this.player, ...) — земля декоративная, игрок проваливается сквозь неё. Сделай землю физической: this.ground = this.physics.add.staticGroup(); this.ground.create(1500, 580, 'pixel').setScale(w, h).refreshBody(); this.physics.add.collider(this.player, this.ground);`);
+  }
+  return errs;
+}
+
+// Коллбек overlap, наносящий урон игроку, но не уничтожающий объект и не дающий
+// неуязвимости — overlap срабатывает каждый кадр пересечения → урон 60 раз/сек,
+// мгновенная смерть. Нужен invincible-флаг с delayedCall или destroy объекта.
+function detectHitNoInvincible(body) {
+  if (!body) return [];
+  const errs = [];
+  const cbNames = new Set();
+  for (const m of body.matchAll(/(?:overlap|collider)\s*\(\s*this\.player\s*,\s*this\.\w+\s*,\s*this\.(\w+)\s*,/g)) cbNames.add(m[1]);
+  const defs = methodDefs(body);
+  for (let i = 0; i < defs.length; i++) {
+    const name = defs[i][1];
+    if (!cbNames.has(name)) continue;
+    const seg = body.slice(defs[i].index, i + 1 < defs.length ? defs[i + 1].index : body.length);
+    const hasDamage = /(?:lives|hp|health|life)\s*(?:--|-=)/i.test(seg);
+    if (!hasDamage) continue;
+    if (/\binvincible\b|\bimmune\b|\binvuln\b/.test(seg)) continue;
+    if (/\.destroy\(\)/.test(seg)) continue;
+    const m = seg.match(/(?:lives|hp|health|life)\s*(?:--|-=)/i);
+    errs.push(`Строка ${lineOf(body, defs[i].index + m.index)}: ${name}() — коллбек overlap наносит урон, но не уничтожает объект и не даёт неуязвимости (нет invincible/immune). overlap срабатывает КАЖДЫЙ кадр пересечения → урон несколько раз за кадр, мгновенная смерть. Добавь защёлку: this.invincible = true; this.time.delayedCall(500, () => this.invincible = false); и в начале коллбека: if (this.invincible) return; — либо уничтожай объект сразу после попадания`);
+  }
+  return errs;
+}
+
+// Спавн предметов справа от игрока без ограничения по ширине мира:
+// x = this.player.x + N + случайность → у края карты предметы за границей и недостижимы.
+function detectSpawnOutOfBounds(body) {
+  if (!body) return [];
+  const errs = [];
+  for (const m of body.matchAll(/x\s*=\s*this\.player\.x\s*\+\s*\d+(?:\s*\+\s*this\.rng\.between\s*\([^)]*\))?/g)) {
+    const lineStart = body.lastIndexOf('\n', m.index) + 1;
+    const lineEnd = body.indexOf('\n', m.index);
+    const line = body.slice(lineStart, lineEnd === -1 ? body.length : lineEnd);
+    if (/Math\.min|Clamp|worldWidth|setBounds/.test(line)) continue;
+    errs.push(`Строка ${lineOf(body, m.index)}: спавн за пределами карты — x считается от игрока (this.player.x + N + случайность) БЕЗ ограничения Math.min/Clamp по ширине мира. Игрок у края → предметы/враги спавнятся за границей и недостижимы. Ограничивай: const x = Math.min(this.player.x + N + this.rng.between(...), WORLD_WIDTH - 200);`);
+  }
+  return errs;
+}
+
+// Метод из update-цепочки создаёт delayedCall, меняющий состояние (setSize/флаг),
+// но НЕ сохраняет таймер и НЕ отменяет предыдущий → при зажатой клавише десятки
+// параллельных таймеров, состояние ломается (слайд сбрасывается раньше времени).
+function detectUntrackedDelayedCall(body) {
+  if (!body) return [];
+  const defs = methodDefs(body);
+  const methods = new Map();
+  for (let i = 0; i < defs.length; i++) {
+    const start = defs[i].index;
+    const end = i + 1 < defs.length ? defs[i + 1].index : body.length;
+    methods.set(defs[i][1], { start, end, seg: body.slice(start, end) });
+  }
+  // Граф вызовов от update() (транзитивно): какие методы срабатывают каждый кадр
+  const fromUpdate = new Set(['update']);
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const name of [...fromUpdate]) {
+      const seg = methods.get(name)?.seg || '';
+      for (const m of seg.matchAll(/this\.([A-Za-z_$][\w$]*)\s*\(/g)) {
+        if (methods.has(m[1]) && !fromUpdate.has(m[1])) { fromUpdate.add(m[1]); changed = true; }
+      }
+    }
+  }
+  const errs = [];
+  for (const name of fromUpdate) {
+    const mm = methods.get(name);
+    if (!mm || !mm.seg.includes('delayedCall')) continue;
+    if (/removeEvent/.test(mm.seg) || /this\.\w*[Tt]imer\s*=\s*this\.time\.delayedCall/.test(mm.seg)) continue;
+    const hit = mm.seg.match(/delayedCall/);
+    if (!hit) continue;
+    // Только если коллбек меняет состояние (конфликт при повторном вызове)
+    const tail = mm.seg.slice(hit.index);
+    if (!/setSize|is\w+\s*=\s*(?:false|true)/.test(tail)) continue;
+    errs.push(`Строка ${lineOf(body, mm.start + hit.index)}: ${name}() вызывается из update() и создаёт this.time.delayedCall БЕЗ сохранения таймера и без отмены предыдущего (нет this.slideTimer/removeEvent). При зажатой клавише метод срабатывает каждый кадр → десятки параллельных таймеров, состояние ломается (слайд сбрасывается раньше времени). Сохраняй и отменяй: if (this.slideTimer) this.time.removeEvent(this.slideTimer); this.slideTimer = this.time.delayedCall(500, () => {...});`);
+  }
+  return errs;
+}
+
+// group.countActive() без аргумента считает активные И неактивные (в т.ч. уничтоженные)
+// — условие спавна никогда не срабатывает как задумано → бесконечный спавн или его отсутствие.
+function detectCountActiveNoArg(body) {
+  if (!body) return [];
+  const errs = [];
+  for (const m of body.matchAll(/\.countActive\s*\(\s*\)/g)) {
+    errs.push(`Строка ${lineOf(body, m.index)}: group.countActive() без аргумента считает и неактивные, и уничтоженные объекты — условие спавна врёт (бесконечный/пустой спавн). Используй countActive(true)`);
+  }
+  return errs;
+}
+
+// Скорость множится (this.gameSpeed *= rate) без верхнего предела Math.min —
+// через пару минут игра разгоняется в разы, анимации и коллизии не успевают.
+function detectSpeedUncapped(body) {
+  if (!body) return [];
+  const errs = [];
+  const m = body.match(/this\.\w*[Ss]peed\s*\*=/);
+  if (!m) return errs;
+  if (/Math\.min\s*\([^)]*this\.\w*[Ss]peed/.test(body)) return errs;
+  errs.push(`Строка ${lineOf(body, m.index)}: скорость множится БЕЗ верхнего предела (this.gameSpeed *= rate без Math.min) — через минуту игра разгоняется в разы, анимации и коллизии не успевают. Обязателен cap: this.gameSpeed = Math.min(this.gameSpeed * rate, MAX_SPEED); где MAX_SPEED — this-константа (например 600)`);
+  return errs;
+}
+
+// Двойной прыжок через body.blocked.down без флага isGrounded — на краю платформы
+// или при скольжении blocked.down врёт → двойной прыжок срабатывает в воздухе.
+function detectDoubleJumpNoGrounded(body) {
+  if (!body) return [];
+  const defs = methodDefs(body);
+  const errs = [];
+  for (let i = 0; i < defs.length; i++) {
+    const seg = body.slice(defs[i].index, i + 1 < defs.length ? defs[i + 1].index : body.length);
+    if (!seg.includes('blocked.down')) continue;
+    if (!/DoubleJump|DOUBLE_JUMP|!isDoubleJumped|isDoubleJumped/.test(seg)) continue;
+    if (/\bisGrounded\b/.test(seg)) continue;
+    const m = seg.match(/blocked\.down/);
+    errs.push(`Строка ${lineOf(body, defs[i].index + m.index)}: двойной прыжок проверяется через body.blocked.down БЕЗ флага isGrounded — на краю платформы/при скольжении blocked.down врёт, и двойной прыжок срабатывает в воздухе. Введи isGrounded через коллизию: this.physics.add.collider(this.player, this.ground, () => { this.isGrounded = true; }); и сбрасывай его при взлёте. Прыжок/двойной прыжок — только на основе isGrounded`);
+  }
+  return errs;
+}
+
+// Частицы останавливаются НАВСЕГДА по лимиту emitParticleCount (.stop() в методе)
+// — шлейф/фон умирает до конца игры. Не стопай: уменьши frequency или deathZone.
+function detectParticleStopOnCount(body) {
+  if (!body) return [];
+  const defs = methodDefs(body);
+  const errs = [];
+  for (let i = 0; i < defs.length; i++) {
+    const seg = body.slice(defs[i].index, i + 1 < defs.length ? defs[i + 1].index : body.length);
+    if (!seg.includes('emitParticleCount') || !seg.includes('.stop()')) continue;
+    const m = seg.match(/emitParticleCount/);
+    errs.push(`Строка ${lineOf(body, defs[i].index + m.index)}: частицы останавливаются НАВСЕГДА по лимиту emitParticleCount (X.stop() в методе) — шлейф/фон умрёт до конца игры. Не стопай: уменьши частоту эмиссии (frequency) или добавь deathZone/emitZone для автоматической очистки`);
+  }
+  return errs;
+}
+
+// Сигнатуры методов класса (с фильтром контрольных конструкций if/for/while — они на том же
+// отступе и ломают сегментный анализ: сегмент метода обрывался на первом вложенном if).
+function methodDefs(body) {
+  const skip = new Set(['if', 'for', 'while', 'switch', 'catch', 'function', 'else', 'do', 'try', 'finally', 'return', 'each']);
+  return [...body.matchAll(/^\s*([A-Za-z_$][\w$]*)\s*\([^)]*\)\s*\{/gm)].filter(m => !skip.has(m[1]));
 }
 
 // Внутри какого метода класса находится позиция idx (по балансу скобок)
@@ -1289,8 +1453,16 @@ async function generateNew(description, textures, baseCode, meta) {
       const dynTexErrs = detectDynamicTextureKeys(body);
       const fillColorErrs = detectFillColorAssign(body);
       const postFXErrs = detectPostFXUnwrapped(body);
+      const noGroundErrs = detectNoGroundCollision(body);
+      const hitNoInvincibleErrs = detectHitNoInvincible(body);
+      const spawnOobErrs = detectSpawnOutOfBounds(body);
+      const untrackedTimerErrs = detectUntrackedDelayedCall(body);
+      const countActiveErrs = detectCountActiveNoArg(body);
+      const speedUncappedErrs = detectSpeedUncapped(body);
+      const doubleJumpErrs = detectDoubleJumpNoGrounded(body);
+      const particleStopErrs = detectParticleStopOnCount(body);
       const specMisses = checkSpecCoverage(html, spec);
-      const allErrs = [...errs, ...unknownMethods, ...fixedApiErrs, ...colorErrs, ...earlyFollowErrs, ...colliderErrs, ...windowClassErrs, ...doublePhysErrs, ...undefHpErrs, ...seedOverErrs, ...missingNewErrs, ...registryErrs, ...fallbackErrs, ...overlayErrs, ...missingCbErrs, ...uncalledErrs, ...dynTexErrs, ...fillColorErrs, ...postFXErrs];
+      const allErrs = [...errs, ...unknownMethods, ...fixedApiErrs, ...colorErrs, ...earlyFollowErrs, ...colliderErrs, ...windowClassErrs, ...doublePhysErrs, ...undefHpErrs, ...seedOverErrs, ...missingNewErrs, ...registryErrs, ...fallbackErrs, ...overlayErrs, ...missingCbErrs, ...uncalledErrs, ...dynTexErrs, ...fillColorErrs, ...postFXErrs, ...noGroundErrs, ...hitNoInvincibleErrs, ...spawnOobErrs, ...untrackedTimerErrs, ...countActiveErrs, ...speedUncappedErrs, ...doubleJumpErrs, ...particleStopErrs];
       return { html, body, errs: allErrs, specMisses, score: candidateScore({ html, errs: allErrs, specMisses }) };
     }).filter(Boolean);
 
