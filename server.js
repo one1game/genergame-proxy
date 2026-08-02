@@ -1350,7 +1350,7 @@ const server = createServer({ requestTimeout: 0, headersTimeout: 0 }, async (req
   // Health check
   if (req.method === 'GET' && req.url === '/health') {
     res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ ok: true }));
+    res.end(JSON.stringify({ ok: true, rev: '640c1c9' }));
     return;
   }
 
