@@ -106,6 +106,11 @@ const PLAY_SCENE_PROMPT = `Ты — senior Phaser.js 3.87 разработчик
 - ОДНОРАЗОВЫЕ СОБЫТИЯ ИЗ UPDATE(): любой переход сцены (this.scene.start/restart), победа/поражение (victory()/gameOver()) или другое одноразовое действие, которое проверяется в методе, вызываемом из update() (checkRoundConditions и т.п.), ОБЯЗАН быть защищён булевой защёлкой: в начале проверки 'if (this.transitioning) return;', при срабатывании — 'this.transitioning = true;' ДО вызова. Иначе условие (например currentLevel > MAX_LEVELS) остаётся истинным несколько кадров до фактического переключения сцены, и событие срабатывает повторно (двойной звук, дубль Juice, многократный scene.start).
 
 ЗАПРЕЩЕНО (брак): setZIndex, setAnchor, setOpacity, this.add.tween, setInterval, this.sound.add. Для скруглений/цвета — make.graphics + setTint. Для анимаций — this.tweens.add. Для звука — this.sfx.play. (Примечание: setColor() легален для текста Phaser.Text, но для спрайтов его нет.)
+ЗАПРЕЩЕНО (утечка/мёртвый код/краш):
+- текстуры создавать ТОЛЬКО один раз в create() со СТАТИЧЕСКИМ ключом ('droneTex'); НИКОГДА не конкатенируй ключ ('drone_' + wave + '_' + i) — каждая новая текстура навсегда в памяти браузера, сотни текстур = лаги и краш;
+- цвет полосок/фигур менять ТОЛЬКО через .setFillStyle(0xRRGGBB); прямое присвоение .fillColor = НЕ работает в Phaser 3 (визуал не обновится);
+- каждый объявленный метод ОБЯЗАН вызываться (из update()/обработчика клавиши/кнопки) — метод, который нигде не вызывается, это мёртвая механика (например playerShoot() без вызова = нет стрельбы);
+- postFX.addGlow() (и любые postFX-фичи) ОБЯЗАТЕЛЬНО оборачивать: try { this.player.postFX.addGlow(...) } catch (e) {} — на устройствах без WebGL-пайплайнов голый вызов бросает исключение и даёт белый экран.
 ЗАПРЕЩЕНО ОБЪЯВЛЯТЬ: class Music, class Juice, class SFX — эти классы уже определены в каркасе ГЛОБАЛЬНО. Используй this.music / this.sfx / Juice.* как есть, не дублируй их объявления (иначе SyntaxError: Identifier already declared).
 
 ОБЯЗАТЕЛЬНО:
@@ -820,6 +825,64 @@ function lineOf(text, idx) {
   return text.slice(0, idx).split('\n').length;
 }
 
+// Метод определён в классе, но НИГДЕ не вызывается (нет this.<name> ни как вызова,
+// ни как колбэк-ссылки в addEvent/on/overlap). Мёртвый метод = сломанная механика
+// (типовой кейс: playerShoot() написан, но стрельба ни к чему не привязана).
+function detectUncalledMethods(body) {
+  if (!body) return [];
+  const lifecycle = new Set(['constructor', 'create', 'update', 'preload', 'shutdown', 'destroy', 'init', 'render', 'resize']);
+  const errs = [];
+  for (const m of body.matchAll(/^\s*([A-Za-z_$][\w$]*)\s*\([^)]*\)\s*\{/gm)) {
+    const name = m[1];
+    if (lifecycle.has(name)) continue;
+    const rest = body.slice(0, m.index) + ' ' + body.slice(m.index + m[0].length);
+    const used = new RegExp('this\\.' + name + '\\b').test(rest) || new RegExp('\\b' + name + '\\s*\\(').test(body.slice(0, m.index) + ' ' + body.slice(m.index + m[0].length));
+    if (!used) errs.push(`Строка ${lineOf(body, m.index)}: метод ${name}() определён, но нигде не вызывается — привяжи его к клавише/кнопке/событию или удали. Мёртвый метод = неработающая механика (пример: playerShoot() есть, а стрельбы нет)`);
+  }
+  return errs;
+}
+
+// Текстура генерируется с ДИНАМИЧЕСКИМ ключом (конкатенация) — новая текстура в памяти
+// на КАЖДЫЙ объект (makeCreature('drone_' + wave + '_' + i)). На 10-й волне — сотни текстур,
+// лаги и краш на слабых устройствах. Ключ должен быть статическим, создавай текстуру ОДИН раз.
+function detectDynamicTextureKeys(body) {
+  if (!body) return [];
+  const errs = [];
+  for (const m of body.matchAll(/(?:generateTexture|makeCreature)\([^)]*['"][^'"]*['"]\s*\+/g)) {
+    errs.push(`Строка ${lineOf(body, m.index)}: текстура создаётся с ДИНАМИЧЕСКИМ ключом (конкатенация в имени) — это утечка памяти: новый спрайт-лист на каждого врага. Создай текстуру ОДИН раз в create() со статическим ключом ('droneTex') и переиспользуй: this.physics.add.sprite(x, y, 'droneTex')`);
+  }
+  return errs;
+}
+
+// Прямое присвоение .fillColor = не работает в Phaser 3 (свойство read-only getter
+// на Graphics) — цвет не обновится. Только .setFillStyle(0xRRGGBB).
+function detectFillColorAssign(body) {
+  if (!body) return [];
+  const errs = [];
+  for (const m of body.matchAll(/\.fillColor\s*=/g)) {
+    errs.push(`Строка ${lineOf(body, m.index)}: прямое присвоение .fillColor = не обновляет цвет в Phaser 3 — используй .setFillStyle(0xRRGGBB)`);
+  }
+  return errs;
+}
+
+// postFX.addGlow() вне try/catch — на мобильных/софт-рендере бросает исключение
+// (WebGL-пайплайны не инициализированы) → белый экран. Должен быть обёрнут.
+function detectPostFXUnwrapped(body) {
+  if (!body) return [];
+  const defs = [...body.matchAll(/^\s*([A-Za-z_$][\w$]*)\s*\([^)]*\)\s*\{/gm)];
+  const errs = [];
+  for (let i = 0; i < defs.length; i++) {
+    const start = defs[i].index;
+    const end = i + 1 < defs.length ? defs[i + 1].index : body.length;
+    const seg = body.slice(start, end);
+    const hit = seg.indexOf('postFX.addGlow');
+    if (hit > -1 && !/\btry\b/.test(seg)) {
+      errs.push(`Строка ${lineOf(body, start + hit)}: postFX.addGlow() не обёрнут в try/catch — на устройствах без WebGL-пайплайнов бросает исключение и даёт белый экран. Оборачивай: try { this.player.postFX.addGlow(...) } catch(e) {}`);
+    }
+  }
+  return errs;
+}
+
 // Внутри какого метода класса находится позиция idx (по балансу скобок)
 // maskNonCode маскирует строки/комментарии пробелами С СОХРАНЕНИЕМ ДЛИНЫ — иначе
 // `{`/`}` внутри строк ломают подсчёт глубины (depth застревает >0).
@@ -1222,8 +1285,12 @@ async function generateNew(description, textures, baseCode, meta) {
       const fallbackErrs = detectDeadFallback(body);
       const overlayErrs = detectDarkOverlayRect(body);
       const missingCbErrs = detectMissingEventCallback(body);
+      const uncalledErrs = detectUncalledMethods(body);
+      const dynTexErrs = detectDynamicTextureKeys(body);
+      const fillColorErrs = detectFillColorAssign(body);
+      const postFXErrs = detectPostFXUnwrapped(body);
       const specMisses = checkSpecCoverage(html, spec);
-      const allErrs = [...errs, ...unknownMethods, ...fixedApiErrs, ...colorErrs, ...earlyFollowErrs, ...colliderErrs, ...windowClassErrs, ...doublePhysErrs, ...undefHpErrs, ...seedOverErrs, ...missingNewErrs, ...registryErrs, ...fallbackErrs, ...overlayErrs, ...missingCbErrs];
+      const allErrs = [...errs, ...unknownMethods, ...fixedApiErrs, ...colorErrs, ...earlyFollowErrs, ...colliderErrs, ...windowClassErrs, ...doublePhysErrs, ...undefHpErrs, ...seedOverErrs, ...missingNewErrs, ...registryErrs, ...fallbackErrs, ...overlayErrs, ...missingCbErrs, ...uncalledErrs, ...dynTexErrs, ...fillColorErrs, ...postFXErrs];
       return { html, body, errs: allErrs, specMisses, score: candidateScore({ html, errs: allErrs, specMisses }) };
     }).filter(Boolean);
 
