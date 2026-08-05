@@ -440,6 +440,7 @@ function makeCreature(scene, key, seed, palette){
 class SFX {
   constructor(){ this.ctx=ensureAudio(); }
   play(freq, dur, type='square', vol=0.15){
+    if (!this.ctx) return;
     try {
       const o=this.ctx.createOscillator(), g=this.ctx.createGain();
       o.type=type; o.frequency.value=freq; g.gain.value=vol;
