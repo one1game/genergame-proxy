@@ -17,11 +17,18 @@ if (error || !game?.source_code) { console.error('Game not found:', error?.messa
 const errs = [];
 let canvas = { ok: false, reason: 'NO CANVAS' };
 let browser;
+let server; // локальный HTTP-сервер для страницы игры (setContent = about:blank, где localStorage запрещён)
 try {
   browser = await puppeteer.launch({
     headless: 'new',
     args: ['--no-sandbox', '--disable-gpu', '--disable-dev-shm-usage', '--mute-audio', '--use-angle=swiftshader'],
   });
+  server = createServer((req, res) => {
+    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+    res.end(game.source_code);
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const port = server.address().port;
   const page = await browser.newPage();
   await page.setViewport({ width: 800, height: 500 });
   page.on('pageerror', e => errs.push(String(e.stack || e.message || e)));
