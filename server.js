@@ -2018,6 +2018,32 @@ async function notifyUser(job, status, error) {
 const PORT = parseInt(process.env.PORT || '3000');
 server.listen(PORT, () => console.log(`Genergame proxy on :${PORT}`));
 
+// Вотчдог: игра «generating» дольше 12 минут = job умер (OOM/рестарт Render/сеть).
+// Без этого юзер навсегда получает тишину, а игра висит в генерирующихся.
+setInterval(async () => {
+  try {
+    const stale = await getSb()
+      .from('games')
+      .select('id, chat_id, slug')
+      .eq('status', 'generating')
+      .lt('created_at', new Date(Date.now() - 12 * 60_000).toISOString())
+      .limit(5);
+    if (stale.error) return;
+    for (const g of stale.data || []) {
+      await updateGame(g.id, {
+        status: 'failed',
+        error_message: 'Превышено время генерации (12 мин) — job завис/умер. Попробуй ещё раз.',
+      }).catch(() => {});
+      console.log(`⏰ watchdog: ${g.id} → failed (stuck generating)`);
+      if (g.chat_id && g.slug) {
+        notifyUser({ gameId: g.id, chatId: g.chat_id, slug: g.slug }, 'failed', 'Превышено время генерации (12 мин). Попробуй ещё раз.').catch(() => {});
+      }
+    }
+  } catch (e) {
+    console.error('watchdog error:', (e && e.message) || e);
+  }
+}, 60_000).unref();
+
 // Global error handlers
 process.on('unhandledRejection', (err) => console.error('Unhandled Rejection:', err?.message));
 process.on('uncaughtException', (err) => console.error('Uncaught Exception:', err?.message));
