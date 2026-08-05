@@ -60,6 +60,9 @@ async function generateSpec(description) {
   if (firstBrace > -1 && lastBrace > firstBrace) cleaned = cleaned.slice(firstBrace, lastBrace + 1);
   const spec = JSON.parse(cleaned);
   if (!spec || !spec.title) throw new Error('SPEC без title');
+  if (!spec.genre || !spec.core_loop || !spec.win_condition || !spec.lose_condition) {
+    throw new Error('SPEC неполный: нет genre/core_loop/win_condition/lose_condition');
+  }
   return spec;
 }
 
@@ -656,7 +659,14 @@ function checkSpecCoverage(html, spec) {
 
 /** Скоринг кандидата: штраф за QA-ошибки и пропуски ТЗ, бонус за полноту кода */
 function candidateScore(c) {
-  return -c.errs.length * 10 - c.specMisses.length * 3 + (c.html.length / 1000);
+  const html = c.html || '';
+  let score = -c.errs.length * 10 - c.specMisses.length * 3 + (html.length / 1000);
+  // Бонусы за игровую глубину: мета-прогрессия, апгрейды/валюту, вариативность —
+  // чтобы плоская «беги и не умирай» не выигрывала у игры с прогрессией
+  if (/saveProgress|loadProgress|\blevel\b/.test(html)) score += 5;
+  if (/shop|upgrade|currency|coins|cost\s*:/.test(html)) score += 3;
+  if (/rng\.between|Math\.random|seed/.test(html)) score += 2;
+  return score;
 }
 
 // Детектор неопределённых методов: модель вызвала this.foo(), но foo не объявлен
@@ -1519,18 +1529,36 @@ async function polishPass(html, description) {
 // Конвейер генерации
 // ============================================================
 async function generateNew(description, textures, baseCode, meta) {
+  // SPEC ОБЯЗАТЕЛЕН: без геймдизайн-брифа модель варит по сырому description и выходит
+  // тухлая игра (fallback-тайтлы, статичный фон). Ретраим 3 раза (DeepSeek таймаутит/
+  // валит JSON), потом честный failed — лучше внятная ошибка, чем игра без ТЗ.
   let spec = null;
-  try {
-    spec = await generateSpec(description + (baseCode
-      ? '\n(Это УЛУЧШЕНИЕ существующей игры — сохрани жанр и ключевые фишки, но перестрой игру заново, лучше и полнее.)'
-      : ''));
-  } catch { spec = null; } // SPEC не удался — генерим по сырому описанию
+  const specUser = description + (baseCode
+    ? '\n(Это УЛУЧШЕНИЕ существующей игры — сохрани жанр и ключевые фишки, но перестрой игру заново, лучше и полнее.)'
+    : '');
+  for (let specAttempt = 1; specAttempt <= 3; specAttempt++) {
+    try {
+      spec = await generateSpec(specUser);
+      break;
+    } catch (e) {
+      if (specAttempt === 3) {
+        return {
+          html: null,
+          seo: null,
+          attempts: 0,
+          error: 'SPEC (геймдизайн-бриф) не сгенерировался 3 раза: ' + ((e && e.message) || e),
+        };
+      }
+      console.warn(`SPEC attempt ${specAttempt} failed, retry...`);
+    }
+  }
 
   const baseRef = baseCode && baseCode.length > 5000 ? baseCode.slice(0, 14000) : (baseCode || undefined);
   let lastError = '';
   let best = null;
   let bestOverall = null; // лучший по скорингу за ВСЕ попытки — фейл-бэк
   let smokeStatus = null; // 'ok' | 'fail' | 'skipped' — результат headless-смоука
+  let cleanPass = false; // статика чиста + смоук прошёл — review/polish не нужны
 
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
     // Best-of-3: три параллельных тела PlayScene, ранжируем по скорингу покрытия
@@ -1596,6 +1624,12 @@ async function generateNew(description, textures, baseCode, meta) {
     let top = candidates[0];
     if (!bestOverall || top.score > bestOverall.score) bestOverall = top;
 
+    if (top.errs.length > 5) {
+      // Модель не починит 6+ ошибок одной самокритикой — дешевле перегенерировать
+      lastError = 'ПРЕДЫДУЩАЯ ПОПЫТКА НЕ ПРОШЛА QA (слишком много ошибок — перегенерирую):\n- ' + [...top.errs, ...top.specMisses].slice(0, 8).join('\n- ');
+      continue;
+    }
+
     if (top.errs.length || top.specMisses.length) {
       // Мультипасс: самокритика точечно чинит слабые места вместо полной регенерации
       const critiqued = await selfCritique(top.body, spec, description, [...top.errs, ...top.specMisses]);
@@ -1617,6 +1651,7 @@ async function generateNew(description, textures, baseCode, meta) {
         continue;
       }
       best = top.html;
+      cleanPass = true;
       break;
     }
 
@@ -1666,7 +1701,13 @@ async function generateNew(description, textures, baseCode, meta) {
     };
   }
 
-  // Обязательный review (не бонус)
+  // Игра уже чистая и прошла смоук — review/polish только рискуют сломать рабочий код.
+  // «Рабочую игру не трогаем»: отдаём как есть, экономим 2 LLM-вызова.
+  if (cleanPass) {
+    return { html: injectCrashScreen(best), seo: parseSeo(best, description), attempts: MAX_ATTEMPTS, reviewed: false, smoke: smokeStatus };
+  }
+
+  // Обязательный review (не бонус) — только если дошли сюда с незакрытыми замечаниями
   const reviewed = await reviewAndFix(best, description);
   const base = reviewed || best;
 
@@ -1705,9 +1746,8 @@ async function generateLegacy(description, textures, baseCode) {
     let html = ensureCdn(cleanHtml(raw));
     const errs = qaHtml(html).concat(legacyStructuralErrors(html));
     if (!errs.length) {
-      const fixed = (await reviewAndFix(html, description)) || html;
-      const polished = (await polishPass(fixed, description)) || fixed;
-      return { html: polished, seo: parseSeo(polished, description), attempts: attempt, reviewed: true };
+      // Чистая статика — review/polish не трогают рабочую игру (экономим 2 LLM-вызова)
+      return { html, seo: parseSeo(html, description), attempts: attempt, reviewed: false };
     }
     lastError = errs.join('; ');
   }
