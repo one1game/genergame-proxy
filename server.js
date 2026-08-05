@@ -16,6 +16,36 @@ const DS_URL = 'https://api.deepseek.com/v1/chat/completions';
 const MAX_ATTEMPTS = 3;
 const DS_TIMEOUT = 120_000; // 2 мин
 
+// --- Защита от DoS/перерасхода (см. modernization_guide2) ---
+const API_KEY = process.env.API_KEY || ''; // X-API-KEY от бота (Worker); пусто = endpoint публичный
+const MAX_BODY_BYTES = 1_000_000;          // 1 MB на тело запроса
+const MAX_HTML_BYTES = 200_000;            // 200 KB на source_code в БД
+const MAX_JOBS = parseInt(process.env.MAX_JOBS || '2', 10); // параллельных генераций (free-tier Render)
+let activeJobs = 0;
+
+// fetch с таймаутом: updateGame/triggerActionsSmoke/notifyUser иначе могут висеть вечно
+async function fetchWithTimeout(url, opts = {}, ms = 15_000) {
+  const controller = new AbortController();
+  const id = setTimeout(() => controller.abort(), ms);
+  try {
+    return await fetch(url, { ...opts, signal: controller.signal });
+  } finally {
+    clearTimeout(id);
+  }
+}
+
+// Fail-fast по критичным env: молча запустившийся сервер без ключей «тихо» ломается позже
+{
+  const required = ['SUPABASE_URL', 'SUPABASE_SERVICE_KEY', 'DEEPSEEK_API_KEY'];
+  for (const k of required) {
+    if (!process.env[k]) console.warn(`⚠️ ENV ${k} не задан — сервер будет работать некорректно`);
+  }
+  if (!API_KEY) console.warn('⚠️ API_KEY не задан — POST endpoint открыт для всех (жжёт DeepSeek-кредиты)!');
+  if (process.env.GITHUB_TOKEN && !process.env.SMOKE_ENABLED) {
+    console.log('ℹ️ SMOKE_ENABLED выключен (default): runtime-смоук через headlessSmoke пропущен, игры гейтит GitHub Actions');
+  }
+}
+
 // ============================================================
 // СТАДИЯ A — SPEC (JSON-бриф вместо расплывчатой фразы)
 // ============================================================
@@ -58,7 +88,12 @@ async function generateSpec(description) {
   const firstBrace = cleaned.indexOf('{');
   const lastBrace = cleaned.lastIndexOf('}');
   if (firstBrace > -1 && lastBrace > firstBrace) cleaned = cleaned.slice(firstBrace, lastBrace + 1);
-  const spec = JSON.parse(cleaned);
+  let spec;
+  try {
+    spec = JSON.parse(cleaned);
+  } catch (e) {
+    throw new Error(`SPEC parse error: ${e.message}; raw: ${cleaned.slice(0, 1000)}`);
+  }
   if (!spec || !spec.title) throw new Error('SPEC без title');
   if (!spec.genre || !spec.core_loop || !spec.win_condition || !spec.lose_condition) {
     throw new Error('SPEC неполный: нет genre/core_loop/win_condition/lose_condition');
@@ -1767,11 +1802,14 @@ async function generate(description, textures, baseCode, meta) {
 // --- Supabase (lazy init) ---
 let _sb = null;
 function getSb() {
-  if (!_sb) _sb = createClient(SB_URL, SB_KEY);
+  if (!_sb) _sb = createClient(SB_URL, SB_KEY, { fetch: (u, o) => fetchWithTimeout(u, o, 30_000) });
   return _sb;
 }
 
 async function updateGame(gameId, data) {
+  if (data.source_code && typeof data.source_code === 'string' && data.source_code.length > MAX_HTML_BYTES) {
+    throw new Error(`source_code ${data.source_code.length} байт > лимит ${MAX_HTML_BYTES} — слишком большой HTML, не сохраняю`);
+  }
   const { error } = await getSb().from('games').update(data).eq('id', gameId);
   if (error) throw new Error(`Supabase: ${error.message}`);
 }
@@ -1782,7 +1820,7 @@ async function triggerActionsSmoke(gameId) {
   const token = process.env.GITHUB_TOKEN;
   if (!token) { console.log('smoke: GITHUB_TOKEN не задан — Actions-смоук пропущен, fallback ready'); return false; }
   try {
-    const r = await fetch('https://api.github.com/repos/one1game/genergame-proxy/actions/workflows/smoke.yml/dispatches', {
+    const r = await fetchWithTimeout('https://api.github.com/repos/one1game/genergame-proxy/actions/workflows/smoke.yml/dispatches', {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${token}`,
@@ -1790,7 +1828,7 @@ async function triggerActionsSmoke(gameId) {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({ ref: 'main', inputs: { game_id: gameId } }),
-    });
+    }, 15_000);
     const ok = r.status === 204 || r.status === 201;
     console.log(`smoke: Actions dispatch ${gameId} → ${r.status}${ok ? '' : ' ' + (await r.text().catch(() => ''))}`);
     return ok;
@@ -1815,8 +1853,33 @@ const server = createServer({ requestTimeout: 0, headersTimeout: 0 }, async (req
 
   if (req.method !== 'POST') { res.writeHead(405); res.end('POST only'); return; }
 
+  // Auth: секрет от бота (Worker). Пусто в env = endpoint публичный (warn на старте).
+  if (API_KEY && req.headers['x-api-key'] !== API_KEY) {
+    res.writeHead(401, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: 'Unauthorized' }));
+    return;
+  }
+
+  // Лимит параллельных генераций: free-tier Render не тянет N job × 3 LLM-вызова
+  if (activeJobs >= MAX_JOBS) {
+    res.writeHead(429, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: 'Too many concurrent jobs', retry_after: 60 }));
+    return;
+  }
+
+  // Лимит тела запроса: любой может слать гигабайты → OOM
   let body = '';
-  for await (const chunk of req) body += chunk;
+  let received = 0;
+  for await (const chunk of req) {
+    received += chunk.length;
+    if (received > MAX_BODY_BYTES) {
+      res.writeHead(413, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Payload too large' }));
+      req.destroy();
+      return;
+    }
+    body += chunk;
+  }
 
   const startTime = Date.now();
 
@@ -1842,6 +1905,7 @@ const server = createServer({ requestTimeout: 0, headersTimeout: 0 }, async (req
   res.writeHead(202, { 'Content-Type': 'application/json' });
   res.end(JSON.stringify({ ok: true, accepted: true, gameId: job.gameId }));
 
+  activeJobs++;
   runJob(job, startTime).catch((err) => {
     console.error(`❌ job error: ${(err && err.stack) || err}`);
     // Юзера уведомит вотчдог (cron): помечаем failed здесь же, чтобы не ждать 10 минут.
@@ -1850,6 +1914,8 @@ const server = createServer({ requestTimeout: 0, headersTimeout: 0 }, async (req
     updateGame(job.gameId, { status: 'failed', error_message: String((err && err.stack) || err).slice(0, 500) }).catch(() => {});
     // + немедленный callback: вотчдог ждёт до 10 минут, а юзер не должен молчать всё это время
     notifyUser(job, 'failed', String((err && err.message) || err)).catch(() => {});
+  }).finally(() => {
+    activeJobs--;
   });
 });
 
@@ -1875,11 +1941,11 @@ async function runJob(job, startTime) {
           deploy_url: `${PORTAL_URL}/${job.slug}`,
         });
         if (job.slug && job.chatId && seo.title) {
-          fetch(`${PORTAL_URL}/callback`, {
+          fetchWithTimeout(`${PORTAL_URL}/callback`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ slug: job.slug, chatId: job.chatId, title: seo.title, gameId: job.gameId }),
-          }).catch(() => {});
+          }, 15_000).catch(() => {});
         }
         console.log(`✅ ${job.gameId} improved (${job.action}) in ${Date.now() - startTime}ms`);
         return;
@@ -1940,11 +2006,11 @@ async function notifyUser(job, status, error) {
   const body = status === 'ready'
     ? { slug: job.slug, chatId: job.chatId, title: job.title || '', gameId: job.gameId, status: 'ready' }
     : { slug: job.slug, chatId: job.chatId, gameId: job.gameId, status: 'failed', error: String(error || 'unknown').slice(0, 200) };
-  await fetch(`${PORTAL_URL}/callback`, {
+  await fetchWithTimeout(`${PORTAL_URL}/callback`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
-  });
+  }, 15_000);
 }
 
 const PORT = parseInt(process.env.PORT || '3000');
