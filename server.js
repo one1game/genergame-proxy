@@ -355,8 +355,8 @@ function buildGameHtml(playSceneBody, spec, description, meta) {
 <title>${safeTitle}</title>
 <meta name="description" content="${desc}">
 <script src="https://cdn.jsdelivr.net/npm/phaser@3.87.0/dist/phaser.min.js"></script>
-<style>*{margin:0;padding:0;touch-action:none;-webkit-user-select:none;user-select:none}#game{width:100vw;height:100vh;background:#0a0a12;display:flex;justify-content:center;align-items:center}.scanlines{position:fixed;top:0;left:0;width:100vw;height:100vh;background:linear-gradient(rgba(18,16,16,0) 50%,rgba(0,0,0,0.25) 50%),linear-gradient(90deg,rgba(255,0,0,0.06),rgba(0,255,0,0.02),rgba(0,0,255,0.06));background-size:100% 4px,6px 100%;pointer-events:none;z-index:9999;opacity:0.55}#startScreen{position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(5,5,16,0.96);display:flex;flex-direction:column;justify-content:center;align-items:center;z-index:10000;cursor:pointer}#startScreen h1{color:#00ffff;font-family:monospace;font-size:34px;text-shadow:0 0 18px #00ffff;margin:0 16px 12px;text-align:center}#startScreen p{color:#ff00ff;font-family:monospace;font-size:16px;animation:blink 1.2s infinite}@keyframes blink{50%{opacity:0.3}}</style>
-</head><body><div class="scanlines"></div><div id="startScreen"><h1>${safeTitle}</h1><p>[ НАЖМИ В ЛЮБОМ МЕСТЕ, ЧТОБЫ НАЧАТЬ ]</p></div><div id="game"></div><script>
+<style>*{margin:0;padding:0;touch-action:none;-webkit-user-select:none;user-select:none}#game{width:100vw;height:100vh;background:#0a0a12;display:flex;justify-content:center;align-items:center}#startScreen{position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(5,5,16,0.96);display:flex;flex-direction:column;justify-content:center;align-items:center;z-index:10000;cursor:pointer}#startScreen h1{color:#00ffff;font-family:monospace;font-size:34px;text-shadow:0 0 18px #00ffff;margin:0 16px 12px;text-align:center}#startScreen p{color:#ff00ff;font-family:monospace;font-size:16px;animation:blink 1.2s infinite}@keyframes blink{50%{opacity:0.3}}</style>
+</head><body><div id="startScreen"><h1>${safeTitle}</h1><p>[ НАЖМИ В ЛЮБОМ МЕСТЕ, ЧТОБЫ НАЧАТЬ ]</p></div><div id="game"></div><script>
 let _actx=null;
 function ensureAudio(){
   if(!_actx){try{_actx=new(window.AudioContext||window.webkitAudioContext)();}catch(e){}}
@@ -418,9 +418,9 @@ class Juice {
     return t;
   }
 }
-// ======= Фирменный постпроцессинг: bloom + vignette поверх scanlines =======
+// ======= Постпроцессинг: мягкий bloom (только яркие объекты) + лёгкая виньетка =======
 function applyPostFX(cam){
-  try{ cam.postFX.addBloom(0xffffff,0.35,1,0.35,1.4); cam.postFX.addVignette(0.5,0.5,0.8,0.3); }catch(e){}
+  try{ cam.postFX.addBloom(0xffffff,0.9,0.6,0.3,1.2); cam.postFX.addVignette(0.5,0.5,0.5,0.15); }catch(e){}
 }
 // ======= Процедурные существа: блоб из примитивов по seed (не квадраты) =======
 function makeCreature(scene, key, seed, palette){
