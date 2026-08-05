@@ -54,6 +54,7 @@ const SPEC_SYSTEM_PROMPT = `Ты — геймдизайнер и архитек�
 Учти производительность на мобильных, продумай баланс сложности, добавь визуальные «соки» (juice).
 
 Верни ТОЛЬКО JSON без пояснений, строго такой структуры:
+ВНИМАНИЕ: JSON должен быть ПОЛНОСТЬЮ ЗАВЕРШЁН — закрой все скобки/кавычки, не обрезай ни одно поле. Обрезанный JSON = брак, будет отклонён:
 {
   "title": "название на русском",
   "genre": "platformer|shooter|runner|puzzle|arcade|tower_defense|match3|rhythm|survival",
@@ -79,7 +80,7 @@ async function generateSpec(description) {
   const raw = await callDeepSeek([
     { role: 'system', content: SPEC_SYSTEM_PROMPT },
     { role: 'user', content: description }
-  ], { temperature: 0.4, max_tokens: 1000 });
+  ], { temperature: 0.4, max_tokens: 4096 });
   let cleaned = raw.trim();
   // Снимаем ```json ... ``` блок целиком
   const fence = cleaned.match(/```(?:json)?\s*([\s\S]*?)```/i);
