@@ -2,6 +2,7 @@
 // пишет результат: status ready|failed + smoke_result, и при успехе зовёт /callback бота (ссылка юзеру).
 import puppeteer from 'puppeteer';
 import { createClient } from '@supabase/supabase-js';
+import { createServer } from 'node:http';
 
 const SB_URL = process.env.SUPABASE_URL || '';
 const SB_KEY = process.env.SUPABASE_SERVICE_KEY || '';
@@ -36,7 +37,7 @@ try {
     // 'load' + некритичный таймаут: на Actions-раннере CDN может грузиться медленно,
     // но таймаут setContent НЕ должен фейлить прогон — решают pageerror и canvas-проверка.
     // (networkidle0/networkidle2 на Phaser-страницах ведут себя непредсказуемо в CI.)
-    await page.setContent(game.source_code, { waitUntil: 'load', timeout: 20000 });
+    await page.goto(`http://127.0.0.1:${port}/`, { waitUntil: 'load', timeout: 20000 });
   } catch (e) {
     // не пушим в errs: страница могла загрузиться позже таймаута; ждём canvas ниже
     await new Promise(r => setTimeout(r, 5000)).catch(() => {});
@@ -85,6 +86,7 @@ try {
   errs.push('browser: ' + (e && e.message));
 } finally {
   if (browser) await browser.close().catch(() => {});
+  if (server) await new Promise(r => server.close(r)).catch(() => {});
 }
 
 const ok = errs.length === 0 && canvas.ok;
