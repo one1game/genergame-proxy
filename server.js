@@ -373,13 +373,30 @@ function saveProgress(p){try{localStorage.setItem('game_progress',JSON.stringify
 window.GAME_ID = ${JSON.stringify((meta && meta.gameId) || '')};
 // ======= Генеративная музыка: арпеджио-луп, темп растёт со сложностью =======
 class Music {
-  constructor(){ this.ctx=ensureAudio(); this.tempo=96; this.step=0; this.playing=false; this.timer=null; }
+  constructor(){ this.ctx=ensureAudio(); this.tempo=96; this.step=0; this.playing=false; this.timer=null;
+    // Уникальная мелодия под каждую игру: лад и басовая линия выводятся из GAME_ID
+    const id=window.GAME_ID||''; let h=0; for(let i=0;i<id.length;i++){ h=(h*31+id.charCodeAt(i))>>>0; }
+    const p=h%4;
+    this.arp=[
+      [220,277,330,440,554,660,440,330],   // Am
+      [196,233,294,392,494,588,392,294],   // Gm
+      [247,311,370,494,622,740,494,370],   // Bm
+      [174,220,262,349,440,523,349,262],   // Fm
+    ][p];
+    this.bass=[
+      [110,110,82,98],
+      [98,98,147,131],
+      [123,123,92,110],
+      [87,87,131,104],
+    ][p];
+    this.wave=['triangle','sine','triangle','sine'][p];
+  }
   _note(f, delay, dur){
     if(!this.ctx) return;
     try{
       const t=this.ctx.currentTime+delay;
       const o=this.ctx.createOscillator(), g=this.ctx.createGain();
-      o.type='triangle'; o.frequency.value=f;
+      o.type=this.wave; o.frequency.value=f;
       g.gain.setValueAtTime(0.0001,t); g.gain.exponentialRampToValueAtTime(0.05,t+0.02);
       g.gain.exponentialRampToValueAtTime(0.0001,t+dur);
       o.connect(g); g.connect(this.ctx.destination); o.start(t); o.stop(t+dur+0.05);
@@ -391,11 +408,10 @@ class Music {
   _loop(){
     if(!this.playing) return;
     const eighth=(60/this.tempo)/2, s=this.step;
-    const arp=[220,277,330,440,554,660,440,330], bass=[110,110,82,98];
-    this._note(arp[s%arp.length], 0, 0.22);
-    this._note(arp[(s+2)%arp.length]*2, eighth, 0.2);
-    this._note(arp[(s+4)%arp.length], eighth*2, 0.18);
-    this._note(bass[Math.floor(s/4)%bass.length], 0, 0.5);
+    this._note(this.arp[s%this.arp.length], 0, 0.22);
+    this._note(this.arp[(s+2)%this.arp.length]*2, eighth, 0.2);
+    this._note(this.arp[(s+4)%this.arp.length], eighth*2, 0.18);
+    this._note(this.bass[Math.floor(s/4)%this.bass.length], 0, 0.5);
     this.step++;
     this.timer=setTimeout(()=>this._loop(), eighth*1000);
   }
