@@ -686,14 +686,25 @@ function qaHtml(html) {
 }
 
 // Детектор неопределённых глобальных КЛАССОВ/ФУНКЦИЙ в полном HTML: модель вызывает
-// `new SfxManager()` / `SfxManager.play()` / `helperFn()` без объявления. Старый детектор
-// this.X() их не видит, а это ReferenceError на первом же create(). Здесь ловим.
+// `new SfxManager()` / `SfxManager.play()` / `helper()` / `sfx.play()` без объявления.
+// Старый детектор this.X() их не видит, а это ReferenceError на первом же create(). Здесь ловим.
 function detectUndefinedGlobals(html) {
   if (!html) return [];
   const declared = new Set();
   for (const m of html.matchAll(/\bclass\s+([A-Za-z_$][\w$]*)/g)) declared.add(m[1]);
   for (const m of html.matchAll(/\bfunction\s+([A-Za-z_$][\w$]*)\s*\(/g)) declared.add(m[1]);
-  for (const m of html.matchAll(/\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:new\s+[A-Z]|function|class|[({])/g)) declared.add(m[1]);
+  for (const m of html.matchAll(/\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=/g)) declared.add(m[1]);
+  // Параметры функций/методов/стрелок — валидные локальные имена (e, file, data, time, delta...).
+  // Тремя отдельными regex, т.к. общий «съедает» матчи друг друга (('click', function(e){ ...).
+  const addParams = (list) => {
+    for (const p of list.split(',')) {
+      const id = p.trim().split('=')[0].trim().replace(/[{}[\]]/g, '').trim();
+      if (id && /^[A-Za-z_$][\w$]*$/.test(id)) declared.add(id);
+    }
+  };
+  for (const m of html.matchAll(/function(?:\s+[A-Za-z_$][\w$]*)?\s*\(([^)]*)\)/g)) addParams(m[1] || '');
+  for (const m of html.matchAll(/\(([^)]*)\)\s*=>/g)) addParams(m[1] || '');
+  for (const m of html.matchAll(/(?:^|\n)\s*[A-Za-z_$][\w$]*\s*\(([^)]*)\)\s*\{/g)) addParams(m[1] || '');
   const known = new Set([
     'Phaser', 'Math', 'Date', 'JSON', 'Promise', 'Object', 'Array', 'String', 'Number', 'Boolean',
     'Map', 'Set', 'WeakMap', 'WeakSet', 'RegExp', 'Error', 'TypeError', 'ReferenceError', 'SyntaxError',
@@ -701,14 +712,18 @@ function detectUndefinedGlobals(html) {
     'webkitAudioContext', 'console', 'fetch', 'setTimeout', 'clearTimeout', 'setInterval', 'clearInterval',
     'parseInt', 'parseFloat', 'isNaN', 'isFinite', 'performance', 'Intl', 'Symbol', 'Function', 'WebSocket',
     'XMLHttpRequest', 'Image', 'FileReader', 'KeyboardEvent', 'PointerEvent', 'TouchEvent', 'Event',
-    'Blob', 'URL', 'URLSearchParams', 'FormData', 'AbortController', 'AbortSignal', 'crypto',
-    'requestAnimationFrame', 'cancelAnimationFrame', 'globalThis', 'self', 'top', 'parent', 'screen',
-    'location', 'history', 'atob', 'btoa', 'encodeURIComponent', 'decodeURIComponent', 'escape',
-    'unescape', 'undefined', 'NaN', 'Infinity', 'WebSocket', 'Worker', 'MessageChannel', 'CryptoJS',
+    'CustomEvent', 'DeviceOrientationEvent', 'DeviceMotionEvent', 'Blob', 'URL', 'URLSearchParams',
+    'FormData', 'AbortController', 'AbortSignal', 'crypto', 'requestAnimationFrame', 'cancelAnimationFrame',
+    'requestIdleCallback', 'cancelIdleCallback', 'queueMicrotask', 'structuredClone', 'TextDecoder',
+    'TextEncoder', 'globalThis', 'self', 'top', 'parent', 'screen', 'location', 'history', 'atob', 'btoa',
+    'encodeURIComponent', 'decodeURIComponent', 'escape', 'unescape', 'undefined', 'NaN', 'Infinity',
+    'Worker', 'MessageChannel', 'CryptoJS', 'this', 'super',
   ]);
   const used = new Set();
   for (const m of html.matchAll(/\bnew\s+([A-Za-z_$][\w$]*)\b/g)) used.add(m[1]);
   for (const m of html.matchAll(/(?:[^.\w])([A-Z][A-Za-z0-9_$]*)\.\w+\s*\(/g)) used.add(m[1]);
+  // Глобальные вызовы методов на строчных идентификаторах: sfx.play(), actx.resume(), osc.start()
+  for (const m of html.matchAll(/(?:[^.\w])([a-z][A-Za-z0-9_$]*)\.\w+\s*\(/g)) used.add(m[1]);
   const unknown = [...used].filter(n => !declared.has(n) && !known.has(n));
   return unknown;
 }
