@@ -17,6 +17,9 @@ const MAX_ATTEMPTS = 3;
 const DS_TIMEOUT = 120_000; // 2 мин
 
 // --- Защита от DoS/перерасхода (см. modernization_guide2) ---
+// ЭКСПЕРИМЕНТ: чистый промпт — модели уходит ТОЛЬКО описание юзера, без системного шаблона.
+// true = включено, false = стандартный PLAY_SCENE_PROMPT. Откат: поменять на false и задеплоить.
+const RAW_PROMPT = true;
 const API_KEY = process.env.API_KEY || ''; // X-API-KEY от бота (Worker); пусто = endpoint публичный
 const MAX_BODY_BYTES = 1_000_000;          // 1 MB на тело запроса
 const MAX_HTML_BYTES = 200_000;            // 200 KB на source_code в БД
@@ -1603,6 +1606,15 @@ async function callDeepSeek(messages, opts = {}) {
 }
 
 async function generatePlayScene(description, spec, textures, lastError, baseRef) {
+  // ЧИСТЫЙ ПРОМПТ: модели уходит только сырое описание юзера, без ТЗ-брифов и правил.
+  // Всё остальное (ТЗ, QA, review, polish) — служебное, на код игры не влияет.
+  if (RAW_PROMPT) {
+    let user = String(description || '').replace(/^\/(create|creat)(@\w+)?\s*/i, '').trim();
+    if (textures?.length) {
+      user += `\n\nМожешь использовать текстуры (идеи для палитры):\n${textures.map(t => `- ${t.name}: ${t.url}`).join('\n')}`;
+    }
+    return callDeepSeek([{ role: 'user', content: user }]);
+  }
   let user = specBrief(spec, description);
   if (textures?.length) {
     user += `\n\nРеференсные текстуры (можешь использовать как идеи для палитры):\n${textures.map(t => `- ${t.name}: ${t.url}`).join('\n')}`;
@@ -1657,23 +1669,28 @@ async function generateNew(description, textures, baseCode, meta) {
   // тухлая игра (fallback-тайтлы, статичный фон). Ретраим 3 раза (DeepSeek таймаутит/
   // валит JSON), потом честный failed — лучше внятная ошибка, чем игра без ТЗ.
   let spec = null;
-  const specUser = description + (baseCode
-    ? '\n(Это УЛУЧШЕНИЕ существующей игры — сохрани жанр и ключевые фишки, но перестрой игру заново, лучше и полнее.)'
-    : '');
-  for (let specAttempt = 1; specAttempt <= 3; specAttempt++) {
-    try {
-      spec = await generateSpec(specUser);
-      break;
-    } catch (e) {
-      if (specAttempt === 3) {
-        return {
-          html: null,
-          seo: null,
-          attempts: 0,
-          error: 'SPEC (геймдизайн-бриф) не сгенерировался 3 раза: ' + ((e && e.message) || e),
-        };
+  if (!RAW_PROMPT) {
+    // SPEC ОБЯЗАТЕЛЕН (только в стандартном режиме): без геймдизайн-брифа модель варит
+    // по сырому description и выходит тухлая игра. В RAW-режиме ТЗ НЕ генерим — модели
+    // уходит только то, что написал юзер.
+    const specUser = description + (baseCode
+      ? '\n(Это УЛУЧШЕНИЕ существующей игры — сохрани жанр и ключевые фишки, но перестрой игру заново, лучше и полнее.)'
+      : '');
+    for (let specAttempt = 1; specAttempt <= 3; specAttempt++) {
+      try {
+        spec = await generateSpec(specUser);
+        break;
+      } catch (e) {
+        if (specAttempt === 3) {
+          return {
+            html: null,
+            seo: null,
+            attempts: 0,
+            error: 'SPEC (геймдизайн-бриф) не сгенерировался 3 раза: ' + ((e && e.message) || e),
+          };
+        }
+        console.warn(`SPEC attempt ${specAttempt} failed, retry...`);
       }
-      console.warn(`SPEC attempt ${specAttempt} failed, retry...`);
     }
   }
 
@@ -1832,6 +1849,12 @@ async function generateNew(description, textures, baseCode, meta) {
   }
 
   // Обязательный review (не бонус) — только если дошли сюда с незакрытыми замечаниями
+  // RAW: review/polish НЕ гоняем — они переписали бы игру по шаблону, а в эксперименте
+  // модель должна увидеть только чистое описание юзера. Детекторы + selfCritique уже
+  // вычистили баги, дальше — как есть.
+  if (RAW_PROMPT) {
+    return { html: injectCrashScreen(best), seo: parseSeo(best, description), attempts: MAX_ATTEMPTS, reviewed: false, smoke: smokeStatus };
+  }
   const reviewed = await reviewAndFix(best, description);
   const base = reviewed || best;
 
