@@ -679,7 +679,37 @@ function qaHtml(html) {
   if (sx) errs.push(sx);
   errs.push(...validateHtml(html));
   errs.push(...validateStructure(html));
+  const globals = detectUndefinedGlobals(html);
+  if (globals.length) errs.push(`Ссылки на несуществующие глобальные классы/функции (ReferenceError: ... is not defined): ${globals.join(', ')}. Определи каждый как class/function в этом же HTML ИЛИ убери вызов. Если это звук/эффекты — используй прямые Web Audio (AudioContext/OscillatorNode) или встроенные классы, а не внешний менеджер.`);
   return errs;
+}
+
+// Детектор неопределённых глобальных КЛАССОВ/ФУНКЦИЙ в полном HTML: модель вызывает
+// `new SfxManager()` / `SfxManager.play()` / `helperFn()` без объявления. Старый детектор
+// this.X() их не видит, а это ReferenceError на первом же create(). Здесь ловим.
+function detectUndefinedGlobals(html) {
+  if (!html) return [];
+  const declared = new Set();
+  for (const m of html.matchAll(/\bclass\s+([A-Za-z_$][\w$]*)/g)) declared.add(m[1]);
+  for (const m of html.matchAll(/\bfunction\s+([A-Za-z_$][\w$]*)\s*\(/g)) declared.add(m[1]);
+  for (const m of html.matchAll(/\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:new\s+[A-Z]|function|class|[({])/g)) declared.add(m[1]);
+  const known = new Set([
+    'Phaser', 'Math', 'Date', 'JSON', 'Promise', 'Object', 'Array', 'String', 'Number', 'Boolean',
+    'Map', 'Set', 'WeakMap', 'WeakSet', 'RegExp', 'Error', 'TypeError', 'ReferenceError', 'SyntaxError',
+    'RangeError', 'window', 'document', 'navigator', 'localStorage', 'sessionStorage', 'AudioContext',
+    'webkitAudioContext', 'console', 'fetch', 'setTimeout', 'clearTimeout', 'setInterval', 'clearInterval',
+    'parseInt', 'parseFloat', 'isNaN', 'isFinite', 'performance', 'Intl', 'Symbol', 'Function', 'WebSocket',
+    'XMLHttpRequest', 'Image', 'FileReader', 'KeyboardEvent', 'PointerEvent', 'TouchEvent', 'Event',
+    'Blob', 'URL', 'URLSearchParams', 'FormData', 'AbortController', 'AbortSignal', 'crypto',
+    'requestAnimationFrame', 'cancelAnimationFrame', 'globalThis', 'self', 'top', 'parent', 'screen',
+    'location', 'history', 'atob', 'btoa', 'encodeURIComponent', 'decodeURIComponent', 'escape',
+    'unescape', 'undefined', 'NaN', 'Infinity', 'WebSocket', 'Worker', 'MessageChannel', 'CryptoJS',
+  ]);
+  const used = new Set();
+  for (const m of html.matchAll(/\bnew\s+([A-Za-z_$][\w$]*)\b/g)) used.add(m[1]);
+  for (const m of html.matchAll(/(?:[^.\w])([A-Z][A-Za-z0-9_$]*)\.\w+\s*\(/g)) used.add(m[1]);
+  const unknown = [...used].filter(n => !declared.has(n) && !known.has(n));
+  return unknown;
 }
 
 // Структурные проверки для legacy-генераций (монолит, нет скелетона)
