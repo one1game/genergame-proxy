@@ -125,100 +125,110 @@ function specBrief(spec, description) {
 // ============================================================
 // СТАДИЯ B — CODEGEN: модель пишет ТОЛЬКО тело PlayScene
 // ============================================================
-const PLAY_SCENE_PROMPT = `Ты — senior Phaser.js 3.87 разработчик. Каркас игры УЖЕ ГОТОВ: BootScene, MenuScene, GameOverScene, класс SFX (Web Audio), рекорд в localStorage, переходы между сценами. Твоя задача — написать ТОЛЬКО геймплейную логику PlayScene.
+const PLAY_SCENE_PROMPT = `Ты — senior Phaser.js 3.87 разработчик. Верни ПОЛНЫЙ самодостаточный HTML-файл игры от <!DOCTYPE html> до </html>. Готового каркаса НЕТ — всё пишешь сам: CSS, стартовый экран, все сцены, звук через Web Audio, рекорд в localStorage.
 
-ДОСТУПНОЕ ОКРУЖЕНИЕ (используй именно так):
-- this.sfx — экземпляр класса SFX с готовыми эффектами: this.sfx.jump(), this.sfx.dash(), this.sfx.collect(), this.sfx.hit(), this.sfx.win(), this.sfx.over(), this.sfx.levelup(), this.sfx.combo(), this.sfx.shield(), this.sfx.gameover(), this.sfx.victory(). Плюс низкоуровневый this.sfx.play(freq, dur, type, vol). Вызывай нужный звук на каждое событие.
-- this.registry.set('score', n) / this.registry.get('score') — очки. GameOverScene сама прочитает score и сохранит рекорд.
-- this.scene.start('GameOverScene') — завершение игры (победа/поражение).
-- Готовые эффекты (Juice SDK) — НЕ пиши партиклы/тряску/попапы руками, вызывай: Juice.shake(this, intensity), Juice.burst(this, x, y, color, n), Juice.popText(this, x, y, text, color), Juice.comboFlash(this, x, y, mult). Это фирменный стиль игры. ВАЖНО: Juice.shake(this, intensity) — intensity в диапазоне 0.005–0.05 (доля экрана), НЕ пиксели: сильный удар 0.04–0.05, обычный 0.015–0.025, лёгкий 0.005–0.01. Никогда не передавай 5–20.
-- Музыка: this.music = new Music(); this.music.start() — генеративный саундтрек уже готов; this.music.setTempo(bpm) — ускоряй темп по difficulty_curve (например 96 + level*12). Никогда не создавай второй экземпляр Music.
-- Фирменный визуал: в самом начале create() вызови applyPostFX(this.cameras.main) — bloom+vignette (функция уже в каркасе). ЗАПРЕЩЕНО звать её и любые методы сцены (this.events.on, this.cameras, this.input и т.п.) в constructor() — они существуют только после boot сцены, в конструкторе это краш "undefined.on".
-- Уровень: генерируй мир через this.rng (this.rng.between(a,b), this.rng.pick(arr), this.rng.frac()) и this.seed — НЕ через Math.random. Покажи this.seed в HUD как '#seed' — у каждого юзера свой воспроизводимый уровень. ВАЖНО: генератор — ТОЛЬКО new Phaser.Math.RandomDataGenerator(String(seed)), как в скелетоне; Phaser.Math.RNG не существует, и this.rng без 'new' — краш. this.rng/this.seed уже инициализированы в constructor() — НЕ пересоздавай их, только this.rng.init(this.seed) при смене уровня.
-- КОНСТАНТЫ НАСТРОЕК (скорость, количество, урон, тайминги: MAX_DRONES, PLAYER_SPEED, WAVE_INTERVAL и т.п.) — это this.<имя>: объявляй в create() как this.MAX_DRONES = 8 и используй ТОЛЬКО как this.MAX_DRONES во ВСЕХ методах (update(), startNextWave(), createBackground() и любых helper-методах). Голое имя без this. в helper-методе = ReferenceError: MAX_DRONES is not defined (create() уже завершился, локальная const вне области видимости). Если helper-метод читает конфиг — только через this., никогда через локальную переменную create().
-- Существа: makeCreature(this, 'key', seed, [c1,c2,c3]) — создаёт процедурный спрайт из примитивов (мягкий блоб, не квадрат) для игрока/врагов; палитру бери из art_style.palette. ВАЖНО: makeCreature() возвращает ГОТОВЫЙ Arcade-спрайт (this.physics.add.sprite) с телом физики — присваивай результат (const s = makeCreature(...)), ставь позицию (s.setPosition(x,y)) и настраивай тело (s.body.setCollideWorldBounds(true) и т.п.). НИКОГДА не зови this.physics.add.existing(s) на объекты из makeCreature — повторная регистрация пересоздаёт body (неопределённое поведение). physics.add.existing — только для объектов БЕЗ физики (this.add.rectangle, this.add.image и т.п.).
-- Цвета — ТОЛЬКО числа вида 0xRRGGBB (например 0x4a90d9), НИКОГДА строки '#RRGGBB' — setTint/fillStyle/particle tint в Phaser ждут число, строки дают чёрный/непредсказуемый цвет.
-- НИКОГДА не читай Juice, Music, SFX или сцены (BootScene/MenuScene/PlayScene/GameOverScene) через window.ИмяКласса — в classic-script top-level class/const/let НЕ становятся свойствами window (window.Juice === undefined). Используй класс напрямую по имени: Juice.shake(this, ...), new SFX(), new Music().
-- Текстура из BootScene: 'pixel' (белый квадрат 1x1). Свои текстуры создавай в create(): this.make.graphics()...generateTexture('key', w, h), затем this.add.image(...) с .setTint().
-- Время: this.time.addEvent({delay, callback, loop}) — НЕ setInterval.
-- Физика: this.physics.add.* / this.physics.world.enable(...). Коллизии: this.physics.add.overlap/collider — регистрируются ОДИН раз в create() (это привязка постоянного слушателя, а не разовая проверка); НИКОГДА не вызывай их в update() или в helper-методах, вызываемых из update() (checkCollisions и т.п.) — каждый вызов плодит нового слушателя (60 дублей/сек), игра трясётся и тормозит.
-- ОДНОРАЗОВЫЕ СОБЫТИЯ ИЗ UPDATE(): любой переход сцены (this.scene.start/restart), победа/поражение (victory()/gameOver()) или другое одноразовое действие, которое проверяется в методе, вызываемом из update() (checkRoundConditions и т.п.), ОБЯЗАН быть защищён булевой защёлкой: в начале проверки 'if (this.transitioning) return;', при срабатывании — 'this.transitioning = true;' ДО вызова. Иначе условие (например currentLevel > MAX_LEVELS) остаётся истинным несколько кадров до фактического переключения сцены, и событие срабатывает повторно (двойной звук, дубль Juice, многократный scene.start).
+СТРУКТУРА HTML (обязательно):
+<!DOCTYPE html><html><head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
+<title>Название игры — играть онлайн бесплатно</title>
+<meta name="description" content="Кратко опиши игру на русском (1-2 предложения)">
+<meta name="keywords" content="игра, онлайн, ключевые_слова, phaser, browser">
+<script src="https://cdn.jsdelivr.net/npm/phaser@3.87.0/dist/phaser.min.js"></script>
+<style>*{margin:0;padding:0;touch-action:none}#game{width:100vw;height:100vh}</style>
+</head><body>
+<div id="game"></div>
+<script>
+window.onerror = function(m,s,l,c,e){console.error('GAME ERROR:',m,l,c,e); return true;}
+class BootScene extends Phaser.Scene { constructor(){ super('BootScene'); } create(){ this.scene.start('MenuScene'); } }
+class MenuScene extends Phaser.Scene { constructor(){ super('MenuScene'); } create(){ } }
+class PlayScene extends Phaser.Scene { constructor(){ super('PlayScene'); } preload(){ } create(){ } update(time, delta){ } }
+class GameOverScene extends Phaser.Scene { constructor(){ super('GameOverScene'); } create(data){ } }
+const config = { type: Phaser.AUTO, parent: 'game', width: 960, height: 540, backgroundColor: '#1a1a2e', scale: { mode: Phaser.Scale.FIT, autoCenter: Phaser.Scale.CENTER_BOTH }, physics: { default: 'arcade', arcade: { gravity: {y:0}, debug:false } }, scene: [BootScene, MenuScene, PlayScene, GameOverScene] };
+const game = new Phaser.Game(config);
+</script>
+</body></html>
 
-ЗАПРЕЩЕНО (брак): setZIndex, setAnchor, setOpacity, this.add.tween, setInterval, this.sound.add. Для скруглений/цвета — make.graphics + setTint. Для анимаций — this.tweens.add. Для звука — this.sfx.play. (Примечание: setColor() легален для текста Phaser.Text, но для спрайтов его нет.)
-ЗАПРЕЩЕНО (утечка/мёртвый код/краш):
-- текстуры создавать ТОЛЬКО один раз в create() со СТАТИЧЕСКИМ ключом ('droneTex'); НИКОГДА не конкатенируй ключ ('drone_' + wave + '_' + i) — каждая новая текстура навсегда в памяти браузера, сотни текстур = лаги и краш;
-- цвет полосок/фигур менять ТОЛЬКО через .setFillStyle(0xRRGGBB); прямое присвоение .fillColor = НЕ работает в Phaser 3 (визуал не обновится);
-- каждый объявленный метод ОБЯЗАН вызываться (из update()/обработчика клавиши/кнопки) — метод, который нигде не вызывается, это мёртвая механика (например playerShoot() без вызова = нет стрельбы);
-- postFX.addGlow() (и любые postFX-фичи) ОБЯЗАТЕЛЬНО оборачивать: try { this.player.postFX.addGlow(...) } catch (e) {} — на устройствах без WebGL-пайплайнов голый вызов бросает исключение и даёт белый экран.
-- НЕ наноси урон в overlap-коллбеке без защиты: либо уничтожай объект сразу (hazard.destroy()), либо ставь invincible-защёлку (this.invincible = true; this.time.delayedCall(500, () => this.invincible = false)) с проверкой if (this.invincible) return; — overlap срабатывает каждый кадр пересечения, иначе урон 60 раз/сек.
-- Земля/платформы — ВСЕГДА физические: this.physics.add.staticGroup() + .create(...).setScale(w,h).refreshBody() + this.physics.add.collider(this.player, this.ground). Декоративный спрайт земли (add.image/tileSprite) = игрок проваливается сквозь неё.
-- Спавн предметов/врагов справа от игрока — ОБЯЗАТЕЛЬНО ограничивай по ширине мира: const x = Math.min(this.player.x + N + this.rng.between(...), WORLD_WIDTH - 200); — иначе у края карты всё спавнится за границей и недостижимо.
-- this.time.delayedCall, меняющий состояние (setSize, флаги), в методе, вызываемом из update() — сохраняй таймер в this.<имя>Timer и отменяй старый: if (this.slideTimer) this.time.removeEvent(this.slideTimer); this.slideTimer = this.time.delayedCall(...). Иначе при зажатой клавише десятки параллельных таймеров.
-- group.countActive() — ТОЛЬКО с аргументом countActive(true); без аргумента считает и уничтоженные объекты.
-- Рост скорости — ВСЕГДА с пределом: this.gameSpeed = Math.min(this.gameSpeed * rate, MAX_SPEED); никогда голое *= без cap.
-- Двойной прыжок — через флаг isGrounded, устанавливаемый коллбеком коллизии: this.physics.add.collider(this.player, this.ground, () => { this.isGrounded = true; }); сброс при взлёте. НЕ через body.blocked.down — на краю платформы он врёт.
-- Частицы: НИКОГДА this.XParticles.stop() по лимиту emitParticleCount (остановятся навсегда) — уменьшай frequency или добавь deathZone/emitZone.
-- При получении урона — визуальный фидбек: мигание this.tweens.add({targets: this.player, alpha: 0, duration: 100, yoyo: true, repeat: 5}).
-- В shutdown() сбрасывай все мобильные флаги: this.mobileControls.left.isDown = false; ... = false — иначе после смерти кнопка остаётся зажатой в новой игре.
-- Однотипные циклы движения групп — одним методом: moveObjects(group, delta) { group.children.iterate(o => { if (o.active) o.x -= this.gameSpeed * delta / 1000; }); } — не дублируй iterate для каждой группы.
-- this.make.graphics().generateTexture(key, w, h) — с гардом: if (!this.textures.exists(key)) { ... } — не пересоздавай текстуру при каждом запуске сцены.
-- Мёртвые константы запрещены: this.X = значение, которое нигде не читается/не меняется (this.CRYSTAL_VALUE = 1, this.MAX_LIVES = 3 без использования) — объявляй только то, что реально используется.
-- ПОРЯДОК В create() — сначала объекты, потом ссылки: создавай this.player, this.ground, группы и текстуры В ПЕРВУЮ ОЧЕРЕДЬ, и только ПОСЛЕ них вызывай методы, которые их читают (частицы со startFollow, камера startFollow). НИКОГДА не читай this.player.x / this.player.y / this.player.body и любые this.<поле> внутри метода, вызываемого из create() до того, как это поле создано — это TypeError: Cannot read properties of undefined (reading 'x').
-ЗАПРЕЩЕНО ОБЪЯВЛЯТЬ: class Music, class Juice, class SFX — эти классы уже определены в каркасе ГЛОБАЛЬНО. Используй this.music / this.sfx / Juice.* как есть, не дублируй их объявления (иначе SyntaxError: Identifier already declared).
+ЖЁСТКИЕ ПРАВИЛА PHASER 3 API (несоблюдение = брак):
+- setTint(color) — НЕ setColor/setFill; setDepth(n) — НЕ setZIndex; setOrigin(x,y) — НЕ setAnchor; setAlpha(n) — НЕ setOpacity; setScale(x,y) — НЕ setSize для масштаба (setSize меняет hitbox!)
+- body.setVelocity/setVelocityX/setVelocityY — только у physics-объектов; this.physics.add.sprite — для физики, НЕ this.add.sprite
+- this.physics.add.overlap/collider — для столкновений; this.add.graphics() + fillStyle/fillRect/fillCircle/fillGradientStyle — НЕ drawRect/drawCircle (их нет в Phaser)
+- this.tweens.add({targets,...}) — НЕ this.add.tween; this.time.addEvent — НЕ setInterval (ломается при паузе/фоне)
+- this.add.text(x,y,str,{fontSize,color,fontFamily}) — color строкой '#ffffff'
+- Группы: если код использует body.setVelocity/overlap — группа ОБЯЗАТЕЛЬНО this.physics.add.group(), иначе body = null и краш
+- Камера: this.cameras.main.shake/flash/fade — НЕ this.camera
+- Анимации: this.anims.create + load.spritesheet — НЕ выдумывай this.anims.play без create
 
-ОБЯЗАТЕЛЬНО:
-1. Реализуй win_condition и lose_condition из ТЗ и проверяй их в update()/событиях — иначе юзер застрянет навсегда.
-2. Реализуй difficulty_curve буквально (ускорение/рост числа врагов через this.time.addEvent или счётчик).
-3. Реализуй минимум половину juice из ТЗ вызовами Juice SDK: Juice.shake(this) для screen_shake, Juice.burst(this,x,y,color) для particle_burst, Juice.popText(this,x,y,text,color) для score_popup, Juice.comboFlash(this,x,y,mult) для комбо. Не создавай собственные эмиттеры/твины для этих эффектов.
-4. Вызывай this.sfx.play(...) на КАЖДЫЙ sound_cue из ТЗ, который соответствует реализованной механике (минимум половина; мёртвые вызовы несуществующих механик запрещены).
-5. НАЗВАНИЕ ИГРЫ: придумай короткое стильное название (2-4 слова) — в тег <title>, meta description и ЗАГОЛОВОК МЕНЮ (this.add.text с fontSize 40+). НИКОГДА не выводи в title/меню текст запроса юзера или команды /creat — это выглядит как брак.
-6. ФОН — минимум 2 слоя параллакса + жанровая фишка: для synthwave/неона — перспективная сетка и солнце с полосами; для космоса — 2 слоя звёзд с разной скоростью; для леса — 2 слоя деревьев/гор. Параллакс двигается со скоростью меньше gameSpeed (speed * 0.3 / 0.6). Один статичный graphics-фон на весь мир — тухло, запрещено.
-9. Мобильное управление — Phaser-тексты-кнопки (◀ ▶ ▲ DASH) с .setInteractive(), флаги виртуальных клавиш и разбор в update(), без HTML-оверлеев.
-10. ПРЕМИУМ-ФИШКИ (делай минимум 4):
-   - стартовый нарратив: короткая текстовая миссия в начале (this.add.text + tween fade), как в киберпанк-играх;
-   - спец-механика с ресурсом: dash/двойной прыжок/щит, тратящие энергию (0-100), с полоской-индикатором и регенерацией; dash обязательно с Juice.shake(this) и Juice.burst(this,x,y,color);
-   - HUD как в дорогих играх: эмодзи-иконки (💎 ❤️ ⏱ 🏆), рекорд из localStorage показывается в HUD и обновляется на лету, счёт/таймер с подложкой (graphics rect с alpha);
-   - таймер миссии (обратный отсчёт 3:00) и/или условие победы по прогрессу — покажи его в HUD;
-   - шлейф частиц за игроком при рывке/движении (this.add.particles(...).start() при рывке, .stop() после);
-   - фоновый декор-слой: частицы окружения (дождь/искры/звёзды) или параллакс-графика в 2 слоя;
-   - камера-фоллоу на игрока, если мир шире экрана (this.cameras.main.startFollow(player)) + UI с .setScrollFactor(0);
-   - враги с прицеливанием: турели/дроны, стреляющие пулями в сторону игрока (Phaser.Math.Angle.Between);
-    - свечение персонажа: player.postFX.addGlow(0x00ffff, 2, 0, false, 0.1, 10);
-    - финальная точка/портал для победы (не только счётчик);
-    - оверлей результата ВНУТРИ сцены: затемнение (add.rectangle с alpha) + заголовок (победа/поражение) + кнопка «ЗАНОВО» (scene.restart);
-    - мета-прогрессия: собранные кристаллы = валюта, трать её на апгрейды во время игры через Phaser-кнопки (щит/скорость/доп. прыжок/жизнь) — как внутриигровой магазин; валюту и купленные апгрейды сохраняй через ГЛОБАЛЬНЫЕ функции saveProgress({currency, ownedUpgrades}) и loadProgress() (БЕЗ this. — это не методы сцены) — иначе прогресс сбросится при рестарте;
-    - уровни: минимум 3 уровня с переходами (после сбора N кристаллов — level up: перестройка уровня, прогресс-бар, респаун на безопасной платформе, надпись «УРОВЕНЬ N»);
-    - комбо-система: быстрый сбор подряд накапливает множитель (🔥 x5), показывается в HUD и затухает через пару секунд;
-    - пауза: клавиша ESC + кнопка ⏸ → this.physics.pause() + оверлей «ПАУЗА» с «ПРОДОЛЖИТЬ» (this.physics.resume());
-    - щит/неуязвимость с видимым пузырём-графикой (this.add.circle + setStrokeStyle вокруг игрока) и отрисовкой повреждений.
-    - мета-прогрессия через loadProgress()/saveProgress(): для дефолтов используй Object.assign({damage:0,speed:0,shield:0,regen:0}, loadProgress()) — НИКОГДА loadProgress() || {...}: loadProgress() всегда возвращает объект (минимум {}), пустой {} truthy, фолбэк мёртв, у нового игрока поля станут undefined → NaN-урон → врага/раунд невозможно выиграть;
-    - фоновые/декоративные элементы (подложка арены, floor tint, атмосферные прямоугольники) добавляй с .setDepth(-10) или ниже и альфой ≤ 0.5 — никогда не полагайся на порядок добавления для фона: объекты рисуются в порядке добавления, "фон" после пола/стен перекроет их и затемнит игру;
-11. ЭСТЕТИКА: единая палитра из ТЗ (art_style.palette), у объектов тени/свечение через setShadow или tint, чистая композиция, ничего не выглядит "голым текстом".
-12. ЧИСТЫЙ КОД (критично, как senior-разработчик):
-   - кешируй в create() всё, что нужно update(): клавиши (const keys = this.input.keyboard.addKeys(...) ОДИН раз), спрайты, тексты — НИКОГДА не вызывай this.input.keyboard.addKeys / this.add.* / this.physics.add.* внутри update();
-   - прыжок — только через Phaser.Input.Keyboard.JustDown (без автоповтора при удержании);
-   - не вызывай setTint/setAlpha каждый кадр без необходимости (не затирай эффекты удара);
-   - звуки — только через this.sfx.* (jump/dash/collect/hit/win/over), без хардкода частот в каждом месте;
-   - не оставляй мёртвый код: неиспользуемые переменные, флаги, обработчики, никогда не срабатывающие ветки;
-   - если мир шире экрана — камера ОБЯЗАНА следовать за игроком (this.cameras.main.startFollow(player) строго ПОСЛЕ создания player, ОДИН раз, без дублей), иначе часть уровня недостижима;
-   - тайминги согласованы: сообщение/анимация не короче отложенного рестарта.
-13. ПРОФЕССИОНАЛЬНЫЕ ПРИНЦИПЫ:
-   - разбей update() на helper-методы: updatePlayer()/updateEnemies()/checkCollisions()/updateHUD() — по одному действию на метод;
-   - все числовые настройки вынеси в константы вверху create()/класса (GRAVITY, SPEED, MAX_LIVES, JUMP_FORCE...) — без магических чисел в теле;
-   - ограничь количество сущностей (MAX_DRONES, MAX_PARTICLES и т.п.) — не плоди бесконечно, удаляй объекты за границами экрана;
-   - единая точка обновления UI: один метод updateHUD()/refreshUI(), вызывай его при любом изменении счёта/жизней/таймера — не обновляй текст в 10 местах;
-   - localStorage — ТОЛЬКО в try/catch (браузер может блокировать);
-   - если entity сложная (дрон/турель с логикой) — вынеси её в класс, наследуемый от Phaser.Physics.Arcade.Sprite, и добавь туда методы (update/shoot/onHit);
-   - используй delta из update(time, delta) для всех ручных таймеров/движений.
-14. НЕ ОБРЕЗАЙ ОТВЕТ (критично): метод update() обязателен, и каждый this.X(), который ты вызываешь в create()/update()/addEvent, ОБЯЗАН иметь полное определение в конце класса. Если код не влезает — сокращай тело методов, но не оставляй вызовы без определений: игра упадёт с "this.spawnWave is not a function" и пойдёт в мусор. Обрезанный класс без update() = брак.
+ТЕКСТУРЫ (fallback обязателен):
+- this.load.on('loaderror', ...) в preload; в create проверяй this.textures.exists() и рисуй заглушку через this.make.graphics()
+- Если текстур нет — рисуй graphics-примитивами, но не оставляй пустых мест
 
-ЧЕК-ЛИСТ ПЕРЕД ОТВЕТОМ: win/lose проверяются? juice реально в коде? звуки вызываются? нет запрещённых методов?
-ГЛАВНОЕ: игрок должен СТОЯТЬ на платформах/земле и МОЧЬ прыгать — не отключай body.checkCollision.down без причины, иначе игра неиграбельна (проваливание + мёртвый прыжок). Все текстуры, используемые в create() и в this.add.particles, должны быть созданы ДО их первого использования (this.make.graphics + generateTexture раньше, чем add.sprite/image/particles).
+МОБИЛЬНЫЕ УПРАВЛЕНИЯ (обязательно):
+- const isMobile = /Android|iPhone|iPad/i.test(navigator.userAgent) || 'ontouchstart' in window;
+- Кнопки — Phaser-объекты (this.add.circle/.text с .setInteractive()), НЕ HTML-кнопки поверх канваса
+- Виртуальный джойстик/кнопки через this.input.on('pointermove/down/up'), флаги клавиш в update()
+- Кнопки минимум 60x60px, с отступом от края (safe area)
 
-ФОРМАТ ОТВЕТА — ТОЛЬКО методы класса, без пояснений:
-preload(){ ... }
-create(){ ... }
-update(){ ... }`;
+ЗАЩИТНЫЕ ГВАРДЫ (обязательно, иначе runtime-краш = брак):
+- update(time, delta) и ВСЕ вызываемые из него методы — с явными параметрами: update(time, delta){ this.updatePlayer(time, delta); } — НЕ используй глобальный time/delta (ReferenceError: time is not defined)
+- pointerX/pointerY: инициализируй в create() (this.pointerX = this.cameras.main.centerX; ...) и проверяй перед Math.atan2: if (typeof this.pointerX !== 'number') { ... = centerX/centerY; } — иначе NaN
+- Деление на ноль: везде, где dx/dist или dy/dist: let dist = Math.sqrt(dx*dx + dy*dy); if (dist < 0.001) dist = 0.001;
+- this.time.delayedCall(ms, cb): в cb первым делом if (!this.scene.isActive()) return; и сохраняй таймер в this.<имя>Timer, отменяй старый при повторном вызове
+- Кнопки/объекты меню, которые чистишь (upgrade UI и т.п.): сохраняй ссылку в объект-владелец (upgrade.btn = btn) и уничтожай через неё
+- Уничтожение детей группы во время итерации: собери в массив, потом destroy — никогда в children.iterate (иначе undefined.active)
+- setCircle: this.physics.world.enable(obj) заранее, затем obj.body.setCircle(r) — НЕ this.obj.setCircle
+- Одноразовые события/переходы сцен из update()-методов — защёлка: if (this.transitioning) return; this.transitioning = true; ДО срабатывания (иначе дубли: двойной звук, многократный scene.start)
+- overlap/collider регистрируются ТОЛЬКО в create(), ОДИН раз; никогда в update()/helper-методах из update() (60 дублей/сек)
+- ПОРЯДОК в create(): сначала объекты (player, ground, группы, текстуры), ПОТОМ методы, читающие их (startFollow, частицы со follow). Никогда не читай this.player.x до создания player
+
+ЗВУК (Web Audio напрямую, НЕ this.sound.add — звук не загружен):
+- Свой класс/функции: AudioContext + OscillatorNode; анлок: this.input.once('pointerdown', () => { if (actx.state === 'suspended') actx.resume(); });
+- Музыка (по желанию) — свой генеративный луп; останавливай в shutdown()
+- На каждое событие (попадание/сбор/прыжок) — короткий тон (playTone(freq, dur, type))
+
+TELEGRAM WEBAPP (если контекст telegram):
+if (window.Telegram && window.Telegram.WebApp) { const tg = window.Telegram.WebApp; tg.ready(); tg.expand(); tg.disableVerticalSwipes?.(); config.height = tg.viewportStableHeight || window.innerHeight; }
+
+ПРИОРИТЕТ: игра ДОЛЖНА запускаться и работать без ошибок. Если полировка может сломать код или не уложиться в ответ — упрости визуал, НО НЕ ломай логику. Рабочий прототип с простыми кругами лучше красивого кода с багом.
+
+ОБЯЗАТЕЛЬНЫЙ МИНИМУМ (иначе брак):
+- Игрок, враги/препятствия, очки, жизни, game over/победа, рестарт — реально работают
+- Все гварды выше на месте; win_condition/lose_condition из ТЗ реализованы буквально
+- Визуал объектов — graphics-примитивы: this.make.graphics() с fillStyle/fillCircle/fillRect/fillGradientStyle (радиальный градиент: светлый центр → тёмный край) для ВСЕХ объектов — это даёт объём без текстур
+- HUD: очки/жизни/уровень — this.add.text на graphics-подложке, счёт через this.registry.set('score', n)
+- Минимум 3 сцены: Menu (кнопка ИГРАТЬ) → Play → GameOver (счёт, рекорд из localStorage, ЗАНОВО/МЕНЮ)
+
+ПОЛИРОВКА (делай, если не ломает и не укладывается в ответ):
+- Свечение: this.cameras.main.postFX.addGlow/addBloom/addVignette — ТОЛЬКО у камеры (у спрайтов postFX НЕТ), оборачивай в try/catch (без WebGL — белый экран). НЕ shadowBlur
+- Следы пуль: заранее созданный пул кругов ЛИБО this.add.particles({follow:bullet, speed:0, lifespan:300}) — НЕ создавай объекты каждый кадр в update
+- Фон: минимум 2 слоя параллакса (мерцающие звёзды/сетка/деревья, скорость < gameSpeed), туманность
+- HP-бары над врагами (константная ширина при создании, здоровье в this.enemyHP — не читай entity.hp, это NaN → краш Canvas)
+- Частицы на попадании/взрыве/сборе (пул затухающих кругов; не останавливай по emitParticleCount — умрут навсегда)
+- Щиты/ауры — пульсирующее кольцо (tween scale/alpha); мигание при уроне (tween alpha yoyo)
+- Кнопки с визуальным нажатием (scale при pointerdown), твины отклика (flash/shake), fade-переходы между сценами
+- Полный цикл: стартовый экран → пауза (ESC/⏸ + оверлей) → game over/победа → рестарт БЕЗ перезагрузки страницы
+- Глубина: минимум 2 системы прогрессии из ТЗ (волны + апгрейды на очки или комбо-множитель), сложность нарастает; апгрейдов 3-4 (урон, скорострельность, скорость, щит) — достаточно
+- Премиум-фишки (минимум 4): стартовый нарратив; спец-механика с ресурсом (dash/щит с энергией и полоской); HUD с эмодзи-иконками (💎 ❤️ ⏱ 🏆); таймер миссии/прогресс-бар; шлейф частиц; враги с прицеливанием (Phaser.Math.Angle.Between); комбо (🔥 x5); уровни с переходами; портал-финиш; мета-прогрессия через localStorage (Object.assign({defaults}, loadProgress()) — НИКОГДА loadProgress() || {})
+
+ПРОИЗВОДИТЕЛЬНОСТЬ:
+- Уничтожай объекты за пределами экрана; не создавай this.add.* в update каждый кадр — через пул или в create
+- group.countActive(true) — всегда с аргументом true; gameSpeed = Math.min(gameSpeed * rate, MAX_SPEED) — cap обязателен
+- Спавн справа от игрока: Math.min(this.player.x + N + rng.between(...), WORLD_WIDTH - 200) — иначе за границей мира
+- Земля/платформы — физические: physics.add.staticGroup() + collider; декоративный спрайт = проваливание
+- Мёртвые константы запрещены: this.X = значение, которое нигде не читается
+- localStorage — ТОЛЬКО в try/catch; мобильные флаги кнопок сбрасывай в shutdown()
+
+НЕ ОБРЕЗАЙ ОТВЕТ (критично): update() обязателен, каждый this.X(), вызываемый в create()/update()/addEvent, обязан иметь ПОЛНОЕ определение в классе (иначе "this.X is not a function" → мусор). Если код не влезает — сокращай тела, но не оставляй вызовы без определений.
+
+ПЕРЕД ОТВЕТОМ мысленно проверь:
+1. Все методы есть в реальном Phaser 3.87 API?
+2. preload → create → update заполнены, не заглушки? update() на месте?
+3. win/lose условия из ТЗ достижимы и проверяются?
+4. На тач-устройстве управление работает без HTML-оверлеев?
+5. Нет ссылок на несуществующие текстуры без fallback?
+6. Все гварды на месте: pointerX/Y инициализированы, деления на 0 защищены, delayedCall с isActive(), методы с явными time/delta, каждый this.X() определён?
+
+Верни ТОЛЬКО ПОЛНЫЙ HTML-код от <!DOCTYPE html> до </html>. Без markdown-обёртки, без пояснений.`;
 
 // Промпт для авторевью: DeepSeek проверяет сгенерированную игру и чинит баги
 const REVIEW_PROMPT = `Ты — QA-инженер по Phaser.js 3.87. Ниже — HTML-игра, сгенерированная ИИ (каркас: BootScene/MenuScene/PlayScene/GameOverScene). Проверь и исправь ВСЕ баги:
@@ -345,6 +355,21 @@ function cleanRawDescription(d) {
   return String(d || '').replace(/^\/(create|creat)(@\w+)?\s*/i, '').trim();
 }
 function buildGameHtml(playSceneBody, spec, description, meta) {
+  // РЕЖИМ "БЕЗ ШАБЛОНА": модель вернула ПОЛНЫЙ HTML (<!DOCTYPE>/<html>) — используем
+  // ответ как есть, только гарантируем CDN, GAME_ID для лидерборда и экран падения.
+  if (/<!doctype|<html[^>]*>/i.test(playSceneBody || '')) {
+    let full = cleanHtml(playSceneBody);
+    full = ensureCdn(full);
+    const gameId = (meta && meta.gameId) || '';
+    if (gameId) {
+      if (/window\.GAME_ID\s*=/i.test(full)) {
+        full = full.replace(/window\.GAME_ID\s*=\s*[^;]+;/i, `window.GAME_ID = ${JSON.stringify(gameId)};`);
+      } else if (/<\/body>/i.test(full)) {
+        full = full.replace(/<\/body>/i, `<script>window.GAME_ID=${JSON.stringify(gameId)};<\/script>\n</body>`);
+      }
+    }
+    return injectCrashScreen(full);
+  }
   const rawTitle = (spec?.title || safeTruncate(cleanRawDescription(description), 60)).trim();
   const safeTitle = rawTitle.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/'/g, "\\'").replace(/"/g, '&quot;');
   const title = rawTitle;
@@ -581,7 +606,7 @@ new Phaser.Game({
 function cleanPlaySceneBody(raw) {
   let body = raw || '';
   body = body.replace(/^```(?:js|javascript)?\s*/i, '').replace(/\s*```$/i, '').trim();
-  if (/<!doctype|<html[^>]*>/i.test(body)) return null; // модель вернула полный HTML — брак
+  if (/<!doctype|<html[^>]*>/i.test(body)) return body; // ПОЛНЫЙ HTML — используем как есть (режим без шаблона)
   const re = /preload\s*\(|create\s*\(/;
   const m = body.match(re);
   if (!m) return null; // нет preload/create
