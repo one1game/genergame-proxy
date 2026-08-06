@@ -170,6 +170,7 @@ const game = new Phaser.Game(config);
 - Кнопки минимум 60x60px, с отступом от края (safe area)
 
 ЗАЩИТНЫЕ ГВАРДЫ (обязательно, иначе runtime-краш = брак):
+- ГЛОБАЛЬНЫЕ КЛАССЫ/ФУНКЦИИ: никогда не вызывай new Xxx() / Xxx.play() / helper() без объявления этого class/function в ТОМ ЖЕ HTML — иначе ReferenceError: Xxx is not defined на первом же кадре. Каждый используемый глобальный класс обязан быть объявлен (class Sfx {...} / function playTone(){...}) до вызова
 - update(time, delta) и ВСЕ вызываемые из него методы — с явными параметрами: update(time, delta){ this.updatePlayer(time, delta); } — НЕ используй глобальный time/delta (ReferenceError: time is not defined)
 - pointerX/pointerY: инициализируй в create() (this.pointerX = this.cameras.main.centerX; ...) и проверяй перед Math.atan2: if (typeof this.pointerX !== 'number') { ... = centerX/centerY; } — иначе NaN
 - Деление на ноль: везде, где dx/dist или dy/dist: let dist = Math.sqrt(dx*dx + dy*dy); if (dist < 0.001) dist = 0.001;
